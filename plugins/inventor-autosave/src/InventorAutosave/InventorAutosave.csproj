@@ -32,6 +32,10 @@
     <PackageReference Include="Autodesk.Inventor.Sdk" Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
       <ExcludeAssets>build</ExcludeAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Extensions.Logging" />
+    <PackageReference Include="Serilog.Sinks.File" />
   </ItemGroup>
 
   <ItemGroup>
