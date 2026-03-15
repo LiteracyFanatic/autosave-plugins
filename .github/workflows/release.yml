@@ -1,0 +1,74 @@
+name: Release Assets
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to build and upload assets for
+        required: true
+        type: string
+
+jobs:
+  build-and-upload:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "release") {
+            $tag = "${{ github.event.release.tag_name }}"
+          }
+          else {
+            $tag = "${{ inputs.release_tag }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "A release tag is required."
+          }
+
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Run tests
+        shell: pwsh
+        run: dotnet test .\plugins\inventor-autosave\tests\InventorAutosave.Core.Tests\InventorAutosave.Core.Tests.csproj -c Release
+
+      - name: Build release assets
+        shell: pwsh
+        run: .\plugins\inventor-autosave\tools\build-release-assets.ps1 -Version "${{ steps.release.outputs.tag }}" -AssetVersionLabel "${{ steps.release.outputs.tag }}" -OutputRoot .\artifacts
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventor-autosave-${{ steps.release.outputs.tag }}
+          path: artifacts/release/*
+          if-no-files-found: error
+
+      - name: Upload assets to GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assetPaths = Get-ChildItem -LiteralPath artifacts/release -File | ForEach-Object { $_.FullName }
+          if ($assetPaths.Count -eq 0) {
+            throw "No release assets were produced."
+          }
+
+          gh release view "${{ steps.release.outputs.tag }}" --repo "${{ github.repository }}" | Out-Null
+          gh release upload "${{ steps.release.outputs.tag }}" @assetPaths --clobber --repo "${{ github.repository }}"
