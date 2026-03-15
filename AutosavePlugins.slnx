@@ -5,6 +5,9 @@
     <Project Path="plugins/inventor-autosave/src/InventorAutosave.Core/InventorAutosave.Core.csproj" />
     <Project Path="plugins/inventor-autosave/src/InventorAutosave/InventorAutosave.csproj" />
   </Folder>
+  <Folder Name="/plugins/inventor-autosave/installer/">
+    <Project Path="plugins/inventor-autosave/installer/InventorAutosave.Setup.wixproj" />
+  </Folder>
   <Folder Name="/plugins/inventor-autosave/tests/">
     <Project Path="plugins/inventor-autosave/tests/InventorAutosave.Core.Tests/InventorAutosave.Core.Tests.csproj" />
   </Folder>
