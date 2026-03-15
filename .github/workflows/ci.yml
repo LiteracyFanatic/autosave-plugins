@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test-package:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Run tests
+        shell: pwsh
+        run: dotnet test .\plugins\inventor-autosave\tests\InventorAutosave.Core.Tests\InventorAutosave.Core.Tests.csproj -c Release
+
+      - name: Build release assets
+        shell: pwsh
+        run: .\plugins\inventor-autosave\tools\build-release-assets.ps1 -Version 0.0.0 -AssetVersionLabel "ci-${{ github.run_id }}" -OutputRoot .\artifacts
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventor-autosave-ci-${{ github.run_id }}
+          path: artifacts/release/*
+          if-no-files-found: error
