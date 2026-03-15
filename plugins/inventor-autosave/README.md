@@ -22,8 +22,32 @@ dotnet test .\tests\InventorAutosave.Core.Tests\InventorAutosave.Core.Tests.cspr
 
 ## Install
 
+For end users, install from the downloadable MSI attached to each GitHub release.
+
+Release assets include:
+
+- `inventor-autosave-<version>.msi`: per-user installer for Inventor Autosave
+- `inventor-autosave-<version>.zip`: raw published plugin payload
+- `SHA256SUMS.txt`: checksums for the release assets
+
+The installer payload and zip also include the project MIT `LICENSE`, `THIRD-PARTY-NOTICES.md`, and bundled third-party license texts under `licenses\`.
+
+## Developer Install
+
+For local development and testing from a checkout:
+
 ```powershell
 .\tools\install-inventor-autosave.ps1
 ```
 
-The installer builds the add-in, deploys it to the Inventor add-ins directory for Inventor 2026, and can restart Inventor unless `-SkipRestart` is supplied.
+The PowerShell installer builds the add-in, deploys it to the Inventor add-ins directory for Inventor 2026, and can restart Inventor unless `-SkipRestart` is supplied.
+
+## Build Release Assets
+
+On Windows, the release payload and MSI can be built from the repo with:
+
+```powershell
+.\tools\build-release-assets.ps1 -Version 0.1.0 -AssetVersionLabel 0.1.0
+```
+
+That build will fail if the required license documents cannot be bundled into the release payload.
