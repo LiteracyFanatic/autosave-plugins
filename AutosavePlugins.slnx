@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/plugins/" />
+  <Folder Name="/plugins/inventor-autosave/" />
+  <Folder Name="/plugins/inventor-autosave/src/">
+    <Project Path="plugins/inventor-autosave/src/InventorAutosave.Core/InventorAutosave.Core.csproj" />
+    <Project Path="plugins/inventor-autosave/src/InventorAutosave/InventorAutosave.csproj" />
+  </Folder>
+  <Folder Name="/plugins/inventor-autosave/tests/">
+    <Project Path="plugins/inventor-autosave/tests/InventorAutosave.Core.Tests/InventorAutosave.Core.Tests.csproj" />
+  </Folder>
+</Solution>

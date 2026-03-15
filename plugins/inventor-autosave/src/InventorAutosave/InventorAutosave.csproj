@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>InventorAutosave</RootNamespace>
+    <AssemblyName>InventorAutosave</AssemblyName>
+    <InventorVersion>2026</InventorVersion>
+    <CopyInventorFiles>false</CopyInventorFiles>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <EnableComHosting>true</EnableComHosting>
+  </PropertyGroup>
+
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <Reference Include="Autodesk.Inventor.Interop">
+      <HintPath>$(NuGetPackageRoot)/autodesk.inventor.sdk/1.0.3/lib/native/2026/inventor/Autodesk.Inventor.Interop.dll</HintPath>
+      <Private>false</Private>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Autodesk.Inventor.Sdk" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <PackageReference Include="Autodesk.Inventor.Sdk" Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+      <ExcludeAssets>build</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\\InventorAutosave.Core\\InventorAutosave.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="InventorAutosave.Inventor.addin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>

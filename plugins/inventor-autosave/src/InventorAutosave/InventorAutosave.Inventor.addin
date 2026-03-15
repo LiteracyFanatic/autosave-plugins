@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Addin Type="Standard">
+  <ClassId>{9DEF1247-47CE-4011-8065-FA0BC8E17110}</ClassId>
+  <ClientId>{9DEF1247-47CE-4011-8065-FA0BC8E17110}</ClientId>
+  <DisplayName>Inventor Autosave</DisplayName>
+  <Description>Timed and manual full-folder snapshots for Inventor projects.</Description>
+  <Assembly>InventorAutosave.dll</Assembly>
+  <OSType>Win64</OSType>
+  <LoadAutomatically>1</LoadAutomatically>
+  <UserUnloadable>1</UserUnloadable>
+  <Hidden>0</Hidden>
+  <LoadBehavior>0</LoadBehavior>
+  <UserInterfaceVersion>1</UserInterfaceVersion>
+</Addin>
