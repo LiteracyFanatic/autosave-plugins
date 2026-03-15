@@ -1,0 +1,22 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Platform>x64</Platform>
+    <PayloadDir Condition="'$(PayloadDir)' == ''">$(MSBuildProjectDirectory)\..\artifacts\payload</PayloadDir>
+    <InstallerVersion Condition="'$(InstallerVersion)' == ''">0.0.0</InstallerVersion>
+    <OutputName Condition="'$(OutputName)' == ''">inventor-autosave</OutputName>
+    <GeneratedPayloadWxs Condition="'$(GeneratedPayloadWxs)' == ''">$(MSBuildProjectDirectory)\obj\GeneratedPayload.wxs</GeneratedPayloadWxs>
+    <WixVariables>WixUILicenseRtf=$(MSBuildProjectDirectory)\License.rtf</WixVariables>
+    <DefineConstants>PayloadDir=$(PayloadDir);InstallerVersion=$(InstallerVersion)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" />
+    <PackageReference Include="WixToolset.Util.wixext" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(GeneratedPayloadWxs)')">
+    <Compile Include="$(GeneratedPayloadWxs)" />
+  </ItemGroup>
+</Project>

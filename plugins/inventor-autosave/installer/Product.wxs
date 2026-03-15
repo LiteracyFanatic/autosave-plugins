@@ -1,0 +1,41 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package
+    Name="Inventor Autosave"
+    Manufacturer="Autosave Plugins"
+    Version="$(var.InstallerVersion)"
+    UpgradeCode="{6489FA5D-1E35-49BD-AC1E-0E233FDACE57}"
+    Scope="perUser"
+    Language="1033"
+    InstallerVersion="500"
+    Compressed="yes">
+
+    <SummaryInformation Description="Inventor Autosave Installer" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Launch Condition="VersionNT64" Message="Inventor Autosave can only be installed on 64-bit Windows." />
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <util:CloseApplication
+      Id="CloseInventor"
+      Target="Inventor.exe"
+      Description="Autodesk Inventor must be closed before Inventor Autosave can be installed or removed."
+      PromptToContinue="yes"
+      RebootPrompt="no" />
+
+    <StandardDirectory Id="AppDataFolder">
+      <Directory Id="AUTODESKFOLDER" Name="Autodesk">
+        <Directory Id="INVENTORFOLDER" Name="Inventor 2026">
+          <Directory Id="ADDINSFOLDER" Name="Addins">
+            <Directory Id="INSTALLFOLDER" Name="InventorAutosave" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Inventor Autosave" Level="1">
+      <ComponentGroupRef Id="PayloadComponents" />
+    </Feature>
+  </Package>
+</Wix>
