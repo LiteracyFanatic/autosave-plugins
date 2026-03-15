@@ -12,7 +12,6 @@ internal sealed class AutosaveStatusControl : UserControl
     private readonly TextBox _targetDirectoryTextBox;
     private readonly NumericUpDown _intervalNumericUpDown;
     private readonly CheckBox _notificationsCheckBox;
-    private readonly CheckBox _debugModeCheckBox;
     private readonly CheckBox _keepDirectoriesCheckBox;
     private readonly Button _startButton;
     private readonly Button _stopButton;
@@ -115,25 +114,16 @@ internal sealed class AutosaveStatusControl : UserControl
         };
         settingsLayout.Controls.Add(_intervalNumericUpDown, 0, 3);
 
-        _debugModeCheckBox = new CheckBox
-        {
-            AutoSize = true,
-            Text = "Debug mode",
-            Margin = new Padding(0, 2, 8, 8),
-        };
-        settingsLayout.Controls.Add(_debugModeCheckBox, 1, 3);
-
         _notificationsCheckBox = new CheckBox
         {
             AutoSize = true,
             Text = "Show notifications",
-            Margin = new Padding(0, 2, 0, 8),
+            Margin = new Padding(0, 2, 8, 8),
         };
-        settingsLayout.Controls.Add(_notificationsCheckBox, 2, 3);
+        settingsLayout.Controls.Add(_notificationsCheckBox, 1, 3);
 
         _intervalNumericUpDown.ValueChanged += (_, _) => RaiseSettingsChanged();
         _notificationsCheckBox.CheckedChanged += (_, _) => RaiseSettingsChanged();
-        _debugModeCheckBox.CheckedChanged += (_, _) => RaiseSettingsChanged();
 
         _keepDirectoriesCheckBox = new CheckBox
         {
@@ -211,7 +201,6 @@ internal sealed class AutosaveStatusControl : UserControl
             ? settings.SnapshotIntervalMinutes
             : AutosaveDefaults.DefaultIntervalMinutes;
         _notificationsCheckBox.Checked = settings.NotificationsEnabled;
-        _debugModeCheckBox.Checked = settings.DebugModeEnabled;
         _keepDirectoriesCheckBox.Checked = settings.KeepSnapshotDirectories;
         _isLoadingSettings = false;
     }
@@ -223,7 +212,6 @@ internal sealed class AutosaveStatusControl : UserControl
             TargetDirectory = _targetDirectoryTextBox.Text.Trim(),
             NotificationsEnabled = _notificationsCheckBox.Checked,
             SnapshotIntervalMinutes = Decimal.ToInt32(_intervalNumericUpDown.Value),
-            DebugModeEnabled = _debugModeCheckBox.Checked,
             KeepSnapshotDirectories = _keepDirectoriesCheckBox.Checked,
         };
     }

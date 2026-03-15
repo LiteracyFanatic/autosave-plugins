@@ -15,8 +15,5 @@ internal sealed class AutosaveSettings
     public int SnapshotIntervalMinutes { get; set; } = AutosaveDefaults.DefaultIntervalMinutes;
 
     [DataMember(Order = 4)]
-    public bool DebugModeEnabled { get; set; }
-
-    [DataMember(Order = 5)]
     public bool KeepSnapshotDirectories { get; set; }
 }
