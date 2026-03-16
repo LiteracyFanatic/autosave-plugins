@@ -50,4 +50,4 @@ On Windows, the release payload and MSI can be built from the repo with:
 .\tools\build-release-assets.ps1 -Version 0.1.0 -AssetVersionLabel 0.1.0
 ```
 
-That build restores the local `nuget-license` tool, generates dependency notices/license texts, and will fail if the required compliance artifacts cannot be bundled into the release payload.
+That build restores the local `nuget-license` tool, refreshes the repository `THIRD-PARTY-NOTICES.md`, generates the release payload notice/license texts, and will fail if the required compliance artifacts cannot be produced.
