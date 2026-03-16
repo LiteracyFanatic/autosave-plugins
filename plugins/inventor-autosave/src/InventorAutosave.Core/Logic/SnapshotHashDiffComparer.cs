@@ -15,7 +15,10 @@ internal sealed class SnapshotHashDiffResult
 
 internal static class SnapshotHashDiffComparer
 {
-    public static SnapshotHashDiffResult CompareWithPreviousSnapshot(string targetDirectory, string currentSnapshotPath)
+    public static SnapshotHashDiffResult CompareWithPreviousSnapshot(
+        string targetDirectory,
+        string currentSnapshotPath,
+        IEnumerable<string>? ignorePatterns = null)
     {
         var result = new SnapshotHashDiffResult();
         var previousSnapshotPath = FindPreviousSnapshotPath(targetDirectory, currentSnapshotPath);
@@ -26,8 +29,8 @@ internal static class SnapshotHashDiffComparer
 
         result.PreviousSnapshotPath = previousSnapshotPath;
 
-        var currentFiles = EnumerateSnapshotFiles(currentSnapshotPath);
-        var previousFiles = EnumerateSnapshotFiles(previousSnapshotPath);
+        var currentFiles = EnumerateSnapshotFiles(currentSnapshotPath, ignorePatterns);
+        var previousFiles = EnumerateSnapshotFiles(previousSnapshotPath, ignorePatterns);
         var allRelativePaths = new SortedSet<string>(currentFiles.Keys, StringComparer.OrdinalIgnoreCase);
         allRelativePaths.UnionWith(previousFiles.Keys);
 
@@ -127,30 +130,36 @@ internal static class SnapshotHashDiffComparer
         return nameComparison == 0 && candidate.IsDirectory && !currentBest.Value.IsDirectory;
     }
 
-    private static Dictionary<string, string> EnumerateSnapshotFiles(string snapshotPath)
+    private static Dictionary<string, string> EnumerateSnapshotFiles(
+        string snapshotPath,
+        IEnumerable<string>? ignorePatterns)
     {
         if (Directory.Exists(snapshotPath))
         {
-            return EnumerateDirectorySnapshotFiles(snapshotPath);
+            return EnumerateDirectorySnapshotFiles(snapshotPath, ignorePatterns);
         }
 
         if (File.Exists(snapshotPath)
             && string.Equals(Path.GetExtension(snapshotPath), ".zip", StringComparison.OrdinalIgnoreCase))
         {
-            return EnumerateArchiveSnapshotFiles(snapshotPath);
+            return EnumerateArchiveSnapshotFiles(snapshotPath, ignorePatterns);
         }
 
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static Dictionary<string, string> EnumerateDirectorySnapshotFiles(string snapshotDirectory)
+    private static Dictionary<string, string> EnumerateDirectorySnapshotFiles(
+        string snapshotDirectory,
+        IEnumerable<string>? ignorePatterns)
     {
         var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var filePath in Directory.EnumerateFiles(snapshotDirectory, "*", SearchOption.AllDirectories))
         {
             if (!SnapshotFileFilter.IsSupportedSnapshotFile(filePath)
-                || SnapshotFileFilter.IsExcludedArtifact(filePath))
+                || SnapshotFileFilter.IsExcludedArtifact(
+                    NormalizeRelativePath(PathUtilities.GetRelativePath(snapshotDirectory, filePath)),
+                    ignorePatterns))
             {
                 continue;
             }
@@ -162,7 +171,9 @@ internal static class SnapshotHashDiffComparer
         return files;
     }
 
-    private static Dictionary<string, string> EnumerateArchiveSnapshotFiles(string snapshotArchivePath)
+    private static Dictionary<string, string> EnumerateArchiveSnapshotFiles(
+        string snapshotArchivePath,
+        IEnumerable<string>? ignorePatterns)
     {
         var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -176,7 +187,7 @@ internal static class SnapshotHashDiffComparer
 
             var relativePath = NormalizeRelativePath(entry.FullName);
             if (!SnapshotFileFilter.IsSupportedSnapshotFile(relativePath)
-                || SnapshotFileFilter.IsExcludedArtifact(relativePath))
+                || SnapshotFileFilter.IsExcludedArtifact(relativePath, ignorePatterns))
             {
                 continue;
             }
