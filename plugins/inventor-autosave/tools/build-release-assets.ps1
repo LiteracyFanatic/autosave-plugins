@@ -446,7 +446,8 @@ function New-ThirdPartyNoticesContent
         [Parameter(Mandatory = $true)]
         [hashtable]$PackageMap,
         [Parameter(Mandatory = $true)]
-        [hashtable]$BundledLicensePaths
+        [hashtable]$BundledLicensePaths,
+        [string]$BundledTextPrefix = ""
     )
 
     $orderedPackages = $PackageMap.Keys | Sort-Object | ForEach-Object { $PackageMap[$_] }
@@ -474,7 +475,7 @@ function New-ThirdPartyNoticesContent
         $package = $entry.Package
         $packageId = Get-OptionalPackageProperty -Package $package -PropertyName "PackageId"
         $packageVersion = Get-OptionalPackageProperty -Package $package -PropertyName "PackageVersion"
-        $bundledPath = $BundledLicensePaths["$packageId/$packageVersion"]
+        $bundledPath = "$BundledTextPrefix$($BundledLicensePaths["$packageId/$packageVersion"])"
         $licenseLabel = Resolve-LicenseDisplayName -Package $package
         $upstreamUrl = Resolve-UpstreamUrl -Package $package
         $lines.Add("| $packageId | $packageVersion | $licenseLabel | $bundledPath | $upstreamUrl |")
@@ -496,7 +497,7 @@ function New-ThirdPartyNoticesContent
         $packageId = Get-OptionalPackageProperty -Package $package -PropertyName "PackageId"
         $packageVersion = Get-OptionalPackageProperty -Package $package -PropertyName "PackageVersion"
         $scopeLabels = @($entry.Scopes | Sort-Object) -join ", "
-        $bundledPath = $BundledLicensePaths["$packageId/$packageVersion"]
+        $bundledPath = "$BundledTextPrefix$($BundledLicensePaths["$packageId/$packageVersion"])"
         $licenseLabel = Resolve-LicenseDisplayName -Package $package
         $upstreamUrl = Resolve-UpstreamUrl -Package $package
         $lines.Add("| $packageId | $packageVersion | $scopeLabels | $licenseLabel | $bundledPath | $upstreamUrl |")
@@ -520,6 +521,7 @@ function Copy-ComplianceFiles
 
     $licensesDestination = Join-Path $PayloadDirectory "licenses"
     $noticePath = Join-Path $PayloadDirectory "THIRD-PARTY-NOTICES.md"
+    $repositoryNoticePath = Join-Path $repoRoot "THIRD-PARTY-NOTICES.md"
     $temporaryLicenseRoot = Join-Path ([Path]::GetTempPath()) ("inventor-autosave-license-" + [Guid]::NewGuid().ToString("N"))
     $pluginLicenseJson = Join-Path $temporaryLicenseRoot "plugin\licenses.json"
     $pluginDownloadDirectory = Join-Path $temporaryLicenseRoot "plugin\downloaded"
@@ -577,8 +579,10 @@ function Copy-ComplianceFiles
                 -LicensesDestination $licensesDestination
         }
 
-        $noticesContent = New-ThirdPartyNoticesContent -PackageMap $packageMap -BundledLicensePaths $bundledLicensePaths
-        Set-Content -LiteralPath $noticePath -Value $noticesContent
+        $payloadNoticesContent = New-ThirdPartyNoticesContent -PackageMap $packageMap -BundledLicensePaths $bundledLicensePaths
+        $repositoryNoticesContent = New-ThirdPartyNoticesContent -PackageMap $packageMap -BundledLicensePaths $bundledLicensePaths -BundledTextPrefix "release asset "
+        Set-Content -LiteralPath $noticePath -Value $payloadNoticesContent
+        Set-Content -LiteralPath $repositoryNoticePath -Value $repositoryNoticesContent
     }
     finally
     {
