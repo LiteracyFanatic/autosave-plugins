@@ -30,7 +30,7 @@ Release assets include:
 - `inventor-autosave-<version>.zip`: raw published plugin payload
 - `SHA256SUMS.txt`: checksums for the release assets
 
-The installer payload and zip also include the project MIT `LICENSE`, `THIRD-PARTY-NOTICES.md`, and bundled third-party license texts under `licenses\`.
+The installer payload and zip also include the project MIT `LICENSE`, a generated `THIRD-PARTY-NOTICES.md`, and generated per-package third-party license texts under `licenses\`.
 
 ## Developer Install
 
@@ -50,4 +50,4 @@ On Windows, the release payload and MSI can be built from the repo with:
 .\tools\build-release-assets.ps1 -Version 0.1.0 -AssetVersionLabel 0.1.0
 ```
 
-That build will fail if the required license documents cannot be bundled into the release payload.
+That build restores the local `nuget-license` tool, generates dependency notices/license texts, and will fail if the required compliance artifacts cannot be bundled into the release payload.
