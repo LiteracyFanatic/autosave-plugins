@@ -34,6 +34,14 @@
       </Directory>
     </StandardDirectory>
 
+    <Property Id="INSTALLFOLDERPATH">
+      <RegistrySearch
+        Root="HKCU"
+        Key="Software\AutosavePlugins\InventorAutosave"
+        Name="InstallFolder"
+        Type="directory" />
+    </Property>
+
     <Feature Id="MainFeature" Title="Inventor Autosave" Level="1">
       <ComponentGroupRef Id="PayloadComponents" />
     </Feature>

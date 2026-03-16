@@ -438,11 +438,13 @@ function New-PayloadManifest
     $componentRefMarkup = ($componentIds | ForEach-Object { "    <ComponentRef Id=`"$_`" />" }) -join [Environment]::NewLine
 
     $manifest = @(
-        '<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">',
+        '<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">',
         '  <Fragment>',
         '    <DirectoryRef Id="INSTALLFOLDER">',
         '      <Component Id="CleanupFolders" Guid="{DD757673-53C4-43A9-921B-9AED97D7F3DB}">',
         '        <RegistryValue Root="HKCU" Key="Software\AutosavePlugins\InventorAutosave" Name="Installed" Type="integer" Value="1" KeyPath="yes" />',
+        '        <RegistryValue Root="HKCU" Key="Software\AutosavePlugins\InventorAutosave" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" />',
+        '        <util:RemoveFolderEx Property="INSTALLFOLDERPATH" On="uninstall" />',
         $directoryCleanupMarkup,
         '      </Component>',
         $directoryMarkup,
@@ -478,7 +480,7 @@ New-Item -ItemType Directory -Path $installerOutputDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $assetsDirectory -Force | Out-Null
 
 Write-Host "Publishing Inventor Autosave..."
-& dotnet publish $projectPath -c $Configuration -o $payloadDirectory
+& dotnet publish $projectPath -c $Configuration -o $payloadDirectory "-p:Version=$Version"
 if ($LASTEXITCODE -ne 0)
 {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
