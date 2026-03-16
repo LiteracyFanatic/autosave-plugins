@@ -16,4 +16,19 @@ internal sealed class AutosaveSettings
 
     [DataMember(Order = 4)]
     public bool KeepSnapshotDirectories { get; set; }
+
+    [DataMember(Order = 5)]
+    public string[] IgnorePatterns { get; set; } = AutosaveDefaults.CreateDefaultIgnorePatterns();
+
+    [DataMember(Order = 6)]
+    public EditEnvironmentSaveBehavior EditEnvironmentSaveBehavior { get; set; }
+
+    [DataMember(Order = 7)]
+    public int DeferredSaveMinutes { get; set; } = AutosaveDefaults.DefaultDeferredSaveMinutes;
+
+    [DataMember(Order = 8)]
+    public bool WarnAboutFilesOutsideTargetDirectory { get; set; } = true;
+
+    [DataMember(Order = 9)]
+    public bool WarnAboutUnsavedFiles { get; set; } = true;
 }
