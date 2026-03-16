@@ -47,7 +47,7 @@ public sealed class StandardAddInServer : ApplicationAddInServer
         catch (Exception ex)
         {
             WriteStartupTrace($"Activation failed: {ex}");
-            _logger.LogError(ex, "Add-in activation failed.");
+            _logger?.LogError(ex, "Add-in activation failed.");
             throw;
         }
     }

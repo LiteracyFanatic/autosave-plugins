@@ -15,14 +15,9 @@ Release assets produced by `plugins/inventor-autosave/tools/build-release-assets
 
 | Package | Version | License | Bundled text | Upstream |
 | --- | --- | --- | --- | --- |
-| Microsoft.Extensions.DependencyInjection | 10.0.0 | MIT | `licenses/MIT.txt` | https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection/10.0.0 |
 | Microsoft.Extensions.DependencyInjection.Abstractions | 10.0.0 | MIT | `licenses/MIT.txt` | https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection.Abstractions/10.0.0 |
-| Microsoft.Extensions.Logging | 10.0.0 | MIT | `licenses/MIT.txt` | https://www.nuget.org/packages/Microsoft.Extensions.Logging/10.0.0 |
 | Microsoft.Extensions.Logging.Abstractions | 10.0.0 | MIT | `licenses/MIT.txt` | https://www.nuget.org/packages/Microsoft.Extensions.Logging.Abstractions/10.0.0 |
-| Microsoft.Extensions.Options | 10.0.0 | MIT | `licenses/MIT.txt` | https://www.nuget.org/packages/Microsoft.Extensions.Options/10.0.0 |
-| Microsoft.Extensions.Primitives | 10.0.0 | MIT | `licenses/MIT.txt` | https://www.nuget.org/packages/Microsoft.Extensions.Primitives/10.0.0 |
 | Serilog | 4.3.1 | Apache-2.0 | `licenses/Apache-2.0.txt` | https://www.nuget.org/packages/Serilog/4.3.1 |
-| Serilog.Extensions.Logging | 10.0.0 | Apache-2.0 | `licenses/Apache-2.0.txt` | https://www.nuget.org/packages/Serilog.Extensions.Logging/10.0.0 |
 | Serilog.Sinks.File | 7.0.0 | Apache-2.0 | `licenses/Apache-2.0.txt` | https://www.nuget.org/packages/Serilog.Sinks.File/7.0.0 |
 | System.Diagnostics.DiagnosticSource | 10.0.0 | MIT | `licenses/MIT.txt` | https://www.nuget.org/packages/System.Diagnostics.DiagnosticSource/10.0.0 |
 
