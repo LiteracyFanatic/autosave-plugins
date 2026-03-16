@@ -1,62 +1,142 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace InventorAutosave.Core.Logic;
 
 internal static class SnapshotFileFilter
 {
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".ipt",
-        ".iam",
-        ".idw",
-        ".ipn",
-        ".dwg",
-        ".ipj",
-    };
-
-    private static readonly HashSet<string> ExcludedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".bak",
-        ".lck",
-        ".tmp",
-    };
-
     public static bool IsSupportedSnapshotFile(string path)
     {
-        return SupportedExtensions.Contains(Path.GetExtension(path));
+        return !string.IsNullOrWhiteSpace(Path.GetFileName(path));
     }
 
-    public static bool IsExcludedArtifact(string path)
+    public static bool IsExcludedArtifact(string path, IEnumerable<string>? ignorePatterns = null)
     {
-        var extension = Path.GetExtension(path);
-        if (ExcludedExtensions.Contains(extension))
+        var normalizedPath = NormalizeForPatternMatching(path);
+        foreach (var pattern in EnumerateIgnorePatterns(ignorePatterns))
         {
-            return true;
+            if (MatchesPattern(normalizedPath, pattern))
+            {
+                return true;
+            }
         }
 
-        var fileName = Path.GetFileName(path);
-        if (fileName.StartsWith("~", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return PathUtilities.ContainsDirectorySegment(path, "OldVersions");
+        return false;
     }
 
     public static bool IsInsideSnapshotsDirectory(string targetDirectory, string path)
     {
-        var snapshotRoot = PathUtilities.CombineUnderDirectory(targetDirectory, "snapshots");
-        return PathUtilities.IsPathUnderDirectory(snapshotRoot, path);
+        if (!PathUtilities.IsPathUnderDirectory(targetDirectory, path))
+        {
+            return false;
+        }
+
+        var relativePath = PathUtilities.GetRelativePath(targetDirectory, path);
+        return IsRelativePathInsideSnapshotsDirectory(relativePath);
     }
 
-    public static bool ShouldCopyFile(string targetDirectory, string path)
+    public static bool ShouldCopyFile(string targetDirectory, string path, IEnumerable<string>? ignorePatterns = null)
     {
-        return PathUtilities.IsPathUnderDirectory(targetDirectory, path)
-            && IsSupportedSnapshotFile(path)
-            && !IsExcludedArtifact(path)
-            && !IsInsideSnapshotsDirectory(targetDirectory, path);
+        if (!PathUtilities.IsPathUnderDirectory(targetDirectory, path))
+        {
+            return false;
+        }
+
+        var relativePath = PathUtilities.GetRelativePath(targetDirectory, path);
+        return IsSupportedSnapshotFile(path)
+            && !IsExcludedArtifact(relativePath, ignorePatterns)
+            && !IsRelativePathInsideSnapshotsDirectory(relativePath);
     }
 
+    private static IEnumerable<string> EnumerateIgnorePatterns(IEnumerable<string>? ignorePatterns)
+    {
+        if (ignorePatterns == null)
+        {
+            ignorePatterns = AutosaveDefaults.CreateDefaultIgnorePatterns();
+        }
+
+        foreach (var pattern in ignorePatterns)
+        {
+            var trimmed = pattern?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            yield return NormalizeForPatternMatching(trimmed);
+        }
+    }
+
+    private static bool MatchesPattern(string normalizedPath, string normalizedPattern)
+    {
+        var regex = "^" + ConvertGlobToRegex(normalizedPattern) + "$";
+        if (Regex.IsMatch(normalizedPath, regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+
+        if (normalizedPattern.Contains('/'))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(normalizedPath);
+        return Regex.IsMatch(fileName, regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string ConvertGlobToRegex(string pattern)
+    {
+        var builder = new StringBuilder();
+
+        for (var index = 0; index < pattern.Length; index++)
+        {
+            var current = pattern[index];
+            if (current == '*')
+            {
+                var isDoubleStar = index + 1 < pattern.Length && pattern[index + 1] == '*';
+                if (isDoubleStar)
+                {
+                    builder.Append(".*");
+                    index++;
+                }
+                else
+                {
+                    builder.Append(@"[^/]*");
+                }
+
+                continue;
+            }
+
+            if (current == '?')
+            {
+                builder.Append(@"[^/]");
+                continue;
+            }
+
+            builder.Append(Regex.Escape(current.ToString()));
+        }
+
+        return builder.ToString();
+    }
+
+    private static string NormalizeForPatternMatching(string path)
+    {
+        return path.Replace('\\', '/').Trim();
+    }
+
+    private static bool IsRelativePathInsideSnapshotsDirectory(string relativePath)
+    {
+        var normalizedRelativePath = NormalizeForPatternMatching(relativePath);
+        if (string.IsNullOrWhiteSpace(normalizedRelativePath))
+        {
+            return false;
+        }
+
+        var pathSegments = normalizedRelativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return pathSegments.Length > 0
+            && string.Equals(pathSegments[0], "snapshots", StringComparison.OrdinalIgnoreCase);
+    }
 }

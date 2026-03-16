@@ -86,7 +86,8 @@ public sealed class SnapshotHashDiffComparerTests : IDisposable
 
         var result = SnapshotHashDiffComparer.CompareWithPreviousSnapshot(
             targetDirectory,
-            currentSnapshotDirectory);
+            currentSnapshotDirectory,
+            new[] { "ignored.txt" });
 
         Assert.Equal(PathUtilities.NormalizeDirectory(previousSnapshotDirectory), result.PreviousSnapshotPath);
         Assert.Equal(
@@ -135,7 +136,8 @@ public sealed class SnapshotHashDiffComparerTests : IDisposable
 
         var result = SnapshotHashDiffComparer.CompareWithPreviousSnapshot(
             targetDirectory,
-            currentSnapshotArchive);
+            currentSnapshotArchive,
+            new[] { "ignored.txt" });
 
         Assert.Equal(PathUtilities.NormalizeDirectory(previousSnapshotDirectory), result.PreviousSnapshotPath);
         Assert.Equal(
@@ -144,6 +146,31 @@ public sealed class SnapshotHashDiffComparerTests : IDisposable
                 "Changed: changed.ipt",
                 "New: new.ipn",
                 "Removed: removed.idw",
+            },
+            result.DifferingFiles);
+    }
+
+    [Fact]
+    public void CompareWithPreviousSnapshot_IncludesNonInventorFilesByDefault()
+    {
+        var targetDirectory = Path.Combine(_tempRoot, "project");
+        var snapshotRoot = Path.Combine(targetDirectory, "snapshots");
+        var previousSnapshotDirectory = Path.Combine(snapshotRoot, "2026-03-11T10-00-00");
+        var currentSnapshotDirectory = Path.Combine(snapshotRoot, "2026-03-11T10-05-00");
+        Directory.CreateDirectory(previousSnapshotDirectory);
+        Directory.CreateDirectory(currentSnapshotDirectory);
+
+        WriteFile(previousSnapshotDirectory, "notes.txt", "old-content");
+        WriteFile(currentSnapshotDirectory, "notes.txt", "new-content");
+
+        var result = SnapshotHashDiffComparer.CompareWithPreviousSnapshot(
+            targetDirectory,
+            currentSnapshotDirectory);
+
+        Assert.Equal(
+            new[]
+            {
+                "Changed: notes.txt",
             },
             result.DifferingFiles);
     }
