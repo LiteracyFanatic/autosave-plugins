@@ -122,25 +122,6 @@ function Escape-Xml
     return [SecurityElement]::Escape($Value)
 }
 
-function Get-NuGetGlobalPackagesPath
-{
-    $nuGetLocalsOutput = & dotnet nuget locals global-packages --list
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw "Failed to determine the NuGet global packages location."
-    }
-
-    foreach ($line in $nuGetLocalsOutput)
-    {
-        if ($line -match '^\s*global-packages:\s*(.+?)\s*$')
-        {
-            return [Path]::GetFullPath($Matches[1])
-        }
-    }
-
-    throw "dotnet nuget locals output did not include a global-packages entry."
-}
-
 function Copy-RequiredFile
 {
     param(
@@ -164,66 +145,370 @@ function Copy-RequiredFile
     Copy-Item -LiteralPath $SourcePath -Destination $DestinationPath -Force
 }
 
-function Copy-RequiredDirectory
+function Convert-ToSafeFileName
 {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$SourceDirectory,
-        [Parameter(Mandatory = $true)]
-        [string]$DestinationDirectory
+        [string]$Value
     )
 
-    if (-not (Test-Path -LiteralPath $SourceDirectory))
+    return ($Value -replace '[^0-9A-Za-z._-]', '-').Trim('-')
+}
+
+function Get-OptionalPackageProperty
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        $Package,
+        [Parameter(Mandatory = $true)]
+        [string]$PropertyName
+    )
+
+    $property = $Package.PSObject.Properties[$PropertyName]
+    if ($null -eq $property)
     {
-        throw "Required directory not found: $SourceDirectory"
+        return ""
     }
 
-    Ensure-Directory -DirectoryPath $DestinationDirectory
-    Get-ChildItem -LiteralPath $SourceDirectory -Force | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $DestinationDirectory -Recurse -Force
+    return [string]$property.Value
+}
+
+function Restore-LicenseTool
+{
+    Push-Location $repoRoot
+    try
+    {
+        & dotnet tool restore
+        if ($LASTEXITCODE -ne 0)
+        {
+            throw "dotnet tool restore failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally
+    {
+        Pop-Location
     }
 }
 
-function Get-PackagePath
+function Invoke-NuGetLicenseReport
 {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$GlobalPackagesPath,
+        [string]$InputPath,
         [Parameter(Mandatory = $true)]
-        [string]$PackageId,
+        [string]$OutputPath,
         [Parameter(Mandatory = $true)]
-        [string]$Version
+        [string]$DownloadDirectory,
+        [string]$TargetFramework
     )
 
-    $packagePath = Join-Path $GlobalPackagesPath ($PackageId.ToLowerInvariant())
-    $packagePath = Join-Path $packagePath $Version
+    Ensure-Directory -DirectoryPath (Split-Path -Parent $OutputPath)
+    Ensure-Directory -DirectoryPath $DownloadDirectory
 
-    if (-not (Test-Path -LiteralPath $packagePath))
+    $arguments = @(
+        "tool",
+        "run",
+        "nuget-license",
+        "--",
+        "-i",
+        $InputPath,
+        "-t",
+        "-o",
+        "JsonPretty",
+        "-fo",
+        $OutputPath,
+        "-d",
+        $DownloadDirectory
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($TargetFramework))
     {
-        throw "NuGet package '$PackageId/$Version' was not found in the global packages folder '$GlobalPackagesPath'."
+        $arguments += @("-f", $TargetFramework)
     }
 
-    return $packagePath
+    Push-Location $repoRoot
+    try
+    {
+        & dotnet @arguments
+        $exitCode = $LASTEXITCODE
+    }
+    finally
+    {
+        Pop-Location
+    }
+
+    if (-not (Test-Path -LiteralPath $OutputPath))
+    {
+        throw "nuget-license did not produce an output file for '$InputPath'. Exit code: $exitCode."
+    }
+
+    if ($exitCode -ne 0)
+    {
+        Write-Warning "nuget-license returned exit code $exitCode for '$InputPath'. Continuing because it still produced a report."
+    }
+
+    return (Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json)
 }
 
-function Copy-PackageLicenseFile
+function Get-RuntimePackageKeysFromDepsFile
 {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$GlobalPackagesPath,
-        [Parameter(Mandatory = $true)]
-        [string]$PackageId,
-        [Parameter(Mandatory = $true)]
-        [string]$Version,
-        [Parameter(Mandatory = $true)]
-        [string]$PackageRelativePath,
-        [Parameter(Mandatory = $true)]
-        [string]$DestinationPath
+        [string]$DepsFilePath
     )
 
-    $packagePath = Get-PackagePath -GlobalPackagesPath $GlobalPackagesPath -PackageId $PackageId -Version $Version
-    $sourcePath = Join-Path $packagePath $PackageRelativePath
-    Copy-RequiredFile -SourcePath $sourcePath -DestinationPath $DestinationPath
+    if (-not (Test-Path -LiteralPath $DepsFilePath))
+    {
+        throw "Published dependency manifest not found: $DepsFilePath"
+    }
+
+    $deps = Get-Content -LiteralPath $DepsFilePath -Raw | ConvertFrom-Json
+    $runtimePackageKeys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($property in $deps.libraries.PSObject.Properties)
+    {
+        if ($property.Value.type -eq "package")
+        {
+            $runtimePackageKeys.Add($property.Name) | Out-Null
+        }
+    }
+
+    return $runtimePackageKeys
+}
+
+function Resolve-LicenseDisplayName
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        $Package
+    )
+
+    $license = (Get-OptionalPackageProperty -Package $Package -PropertyName "License").Trim()
+    if ([string]::IsNullOrWhiteSpace($license))
+    {
+        return "See bundled license text"
+    }
+
+    if ($license.Length -gt 80 -or $license.Contains("`n") -or $license.Contains("`r") -or $license -match '^\s*https?://')
+    {
+        return "See bundled license text"
+    }
+
+    return $license
+}
+
+function Resolve-UpstreamUrl
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        $Package
+    )
+
+    $packageId = Get-OptionalPackageProperty -Package $Package -PropertyName "PackageId"
+    $packageVersion = Get-OptionalPackageProperty -Package $Package -PropertyName "PackageVersion"
+
+    return "https://www.nuget.org/packages/$packageId/$packageVersion"
+}
+
+function Get-ProjectSdkPackage
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProjectFilePath,
+        [Parameter(Mandatory = $true)]
+        $FallbackLicensePackage
+    )
+
+    [xml]$projectXml = Get-Content -LiteralPath $ProjectFilePath -Raw
+    $sdkAttribute = [string]$projectXml.Project.Sdk
+    if ([string]::IsNullOrWhiteSpace($sdkAttribute) -or -not $sdkAttribute.Contains("/"))
+    {
+        return $null
+    }
+
+    $sdkParts = $sdkAttribute.Split("/", 2)
+    if ($sdkParts.Length -ne 2)
+    {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        PackageId = $sdkParts[0]
+        PackageVersion = $sdkParts[1]
+        License = Get-OptionalPackageProperty -Package $FallbackLicensePackage -PropertyName "License"
+        LicenseUrl = Get-OptionalPackageProperty -Package $FallbackLicensePackage -PropertyName "LicenseUrl"
+        LicenseInformationOrigin = Get-OptionalPackageProperty -Package $FallbackLicensePackage -PropertyName "LicenseInformationOrigin"
+    }
+}
+
+function Copy-PackageLicenseArtifact
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        $Package,
+        [Parameter(Mandatory = $true)]
+        [string[]]$DownloadDirectories,
+        [Parameter(Mandatory = $true)]
+        [string]$LicensesDestination
+    )
+
+    $packageId = Get-OptionalPackageProperty -Package $Package -PropertyName "PackageId"
+    $packageVersion = Get-OptionalPackageProperty -Package $Package -PropertyName "PackageVersion"
+    $safeBaseName = "$(Convert-ToSafeFileName -Value $packageId)-$(Convert-ToSafeFileName -Value $packageVersion)"
+
+    foreach ($downloadDirectory in $DownloadDirectories)
+    {
+        if (-not (Test-Path -LiteralPath $downloadDirectory))
+        {
+            continue
+        }
+
+        $downloadedLicenseFile = Get-ChildItem -LiteralPath $downloadDirectory -File -Filter "$packageId`__$packageVersion.*" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+        if ($null -ne $downloadedLicenseFile)
+        {
+            $destinationFileName = "$safeBaseName$($downloadedLicenseFile.Extension.ToLowerInvariant())"
+            $destinationPath = Join-Path $LicensesDestination $destinationFileName
+            Copy-Item -LiteralPath $downloadedLicenseFile.FullName -Destination $destinationPath -Force
+            return "licenses/$destinationFileName"
+        }
+    }
+
+    $licenseText = Get-OptionalPackageProperty -Package $Package -PropertyName "License"
+    if (-not [string]::IsNullOrWhiteSpace($licenseText))
+    {
+        $destinationFileName = "$safeBaseName.txt"
+        $destinationPath = Join-Path $LicensesDestination $destinationFileName
+        Set-Content -LiteralPath $destinationPath -Value $licenseText
+        return "licenses/$destinationFileName"
+    }
+
+    throw "Unable to resolve a bundled license artifact for package '$packageId/$packageVersion'."
+}
+
+function Add-LicensePackagesToMap
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PackageMap,
+        [Parameter(Mandatory = $true)]
+        $Packages,
+        [Parameter(Mandatory = $true)]
+        [string]$RequestedScope,
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.HashSet[string]]$RuntimePackageKeys,
+        [Parameter(Mandatory = $true)]
+        [string]$DownloadDirectory
+    )
+
+    foreach ($package in $Packages)
+    {
+        $packageId = Get-OptionalPackageProperty -Package $package -PropertyName "PackageId"
+        $packageVersion = Get-OptionalPackageProperty -Package $package -PropertyName "PackageVersion"
+        $packageKey = "$packageId/$packageVersion"
+        $effectiveScope = if ($RequestedScope -eq "Plugin")
+        {
+            if ($RuntimePackageKeys.Contains($packageKey))
+            {
+                "Runtime"
+            }
+            else
+            {
+                "Build"
+            }
+        }
+        else
+        {
+            $RequestedScope
+        }
+
+        if (-not $PackageMap.ContainsKey($packageKey))
+        {
+            $PackageMap[$packageKey] = [ordered]@{
+                Package = $package
+                Scopes = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                DownloadDirectories = New-Object System.Collections.Generic.List[string]
+            }
+        }
+
+        $PackageMap[$packageKey].Scopes.Add($effectiveScope) | Out-Null
+        if (-not $PackageMap[$packageKey].DownloadDirectories.Contains($DownloadDirectory))
+        {
+            $PackageMap[$packageKey].DownloadDirectories.Add($DownloadDirectory)
+        }
+    }
+}
+
+function New-ThirdPartyNoticesContent
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$PackageMap,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$BundledLicensePaths
+    )
+
+    $orderedPackages = $PackageMap.Keys | Sort-Object | ForEach-Object { $PackageMap[$_] }
+    $runtimePackages = @($orderedPackages | Where-Object { $_.Scopes.Contains("Runtime") })
+    $buildAndTestPackages = @($orderedPackages | Where-Object { -not $_.Scopes.Contains("Runtime") })
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# Third-Party Notices")
+    $lines.Add("")
+    $lines.Add("The source code in this repository is licensed under MIT. Third-party dependencies remain under their own licenses and terms.")
+    $lines.Add("")
+    $lines.Add("Release assets produced by plugins/inventor-autosave/tools/build-release-assets.ps1 bundle:")
+    $lines.Add("")
+    $lines.Add("- LICENSE")
+    $lines.Add("- THIRD-PARTY-NOTICES.md")
+    $lines.Add("- licenses/ with per-package license texts generated by nuget-license")
+    $lines.Add("")
+    $lines.Add("## Runtime Packages Bundled With Inventor Autosave")
+    $lines.Add("")
+    $lines.Add("| Package | Version | License | Bundled text | Upstream |")
+    $lines.Add("| --- | --- | --- | --- | --- |")
+
+    foreach ($entry in $runtimePackages)
+    {
+        $package = $entry.Package
+        $packageId = Get-OptionalPackageProperty -Package $package -PropertyName "PackageId"
+        $packageVersion = Get-OptionalPackageProperty -Package $package -PropertyName "PackageVersion"
+        $bundledPath = $BundledLicensePaths["$packageId/$packageVersion"]
+        $licenseLabel = Resolve-LicenseDisplayName -Package $package
+        $upstreamUrl = Resolve-UpstreamUrl -Package $package
+        $lines.Add("| $packageId | $packageVersion | $licenseLabel | $bundledPath | $upstreamUrl |")
+    }
+
+    $lines.Add("")
+    $lines.Add("The runtime package list above comes from the published InventorAutosave.deps.json output for the plugin.")
+    $lines.Add("")
+    $lines.Add("## Build-Time And Test-Time Dependencies")
+    $lines.Add("")
+    $lines.Add("These packages are required to compile the add-in, build the installer, or run tests. They are not redistributed as runtime assemblies with the plugin, but their license information is bundled here for transparency.")
+    $lines.Add("")
+    $lines.Add("| Package | Version | Scope | License or terms | Bundled text | Upstream |")
+    $lines.Add("| --- | --- | --- | --- | --- | --- |")
+
+    foreach ($entry in $buildAndTestPackages)
+    {
+        $package = $entry.Package
+        $packageId = Get-OptionalPackageProperty -Package $package -PropertyName "PackageId"
+        $packageVersion = Get-OptionalPackageProperty -Package $package -PropertyName "PackageVersion"
+        $scopeLabels = @($entry.Scopes | Sort-Object) -join ", "
+        $bundledPath = $BundledLicensePaths["$packageId/$packageVersion"]
+        $licenseLabel = Resolve-LicenseDisplayName -Package $package
+        $upstreamUrl = Resolve-UpstreamUrl -Package $package
+        $lines.Add("| $packageId | $packageVersion | $scopeLabels | $licenseLabel | $bundledPath | $upstreamUrl |")
+    }
+
+    $lines.Add("")
+    $lines.Add("## Notes")
+    $lines.Add("")
+    $lines.Add("- Dependency metadata and license texts are generated during the release build with the local nuget-license tool manifest.")
+    $lines.Add("- Packages that expose license terms through embedded package files rather than SPDX identifiers are bundled as extracted text files.")
+
+    return ($lines -join [Environment]::NewLine)
 }
 
 function Copy-ComplianceFiles
@@ -234,27 +519,71 @@ function Copy-ComplianceFiles
     )
 
     $licensesDestination = Join-Path $PayloadDirectory "licenses"
+    $noticePath = Join-Path $PayloadDirectory "THIRD-PARTY-NOTICES.md"
+    $temporaryLicenseRoot = Join-Path ([Path]::GetTempPath()) ("inventor-autosave-license-" + [Guid]::NewGuid().ToString("N"))
+    $pluginLicenseJson = Join-Path $temporaryLicenseRoot "plugin\licenses.json"
+    $pluginDownloadDirectory = Join-Path $temporaryLicenseRoot "plugin\downloaded"
+    $testLicenseJson = Join-Path $temporaryLicenseRoot "tests\licenses.json"
+    $testDownloadDirectory = Join-Path $temporaryLicenseRoot "tests\downloaded"
+    $installerLicenseJson = Join-Path $temporaryLicenseRoot "installer\licenses.json"
+    $installerDownloadDirectory = Join-Path $temporaryLicenseRoot "installer\downloaded"
+    $testProjectPath = Join-Path $pluginRoot "tests\InventorAutosave.Core.Tests\InventorAutosave.Core.Tests.csproj"
+    $depsFilePath = Join-Path $PayloadDirectory "InventorAutosave.deps.json"
+
     Ensure-Directory -DirectoryPath $licensesDestination
-
     Copy-RequiredFile -SourcePath (Join-Path $repoRoot "LICENSE") -DestinationPath (Join-Path $PayloadDirectory "LICENSE")
-    Copy-RequiredFile -SourcePath (Join-Path $repoRoot "THIRD-PARTY-NOTICES.md") -DestinationPath (Join-Path $PayloadDirectory "THIRD-PARTY-NOTICES.md")
-    Copy-RequiredDirectory -SourceDirectory (Join-Path $repoRoot "licenses") -DestinationDirectory $licensesDestination
+    Restore-LicenseTool
 
-    $globalPackagesPath = Get-NuGetGlobalPackagesPath
+    try
+    {
+        $runtimePackageKeys = Get-RuntimePackageKeysFromDepsFile -DepsFilePath $depsFilePath
+        $pluginPackages = Invoke-NuGetLicenseReport `
+            -InputPath $projectPath `
+            -OutputPath $pluginLicenseJson `
+            -DownloadDirectory $pluginDownloadDirectory `
+            -TargetFramework "net8.0-windows"
+        $testPackages = Invoke-NuGetLicenseReport `
+            -InputPath $testProjectPath `
+            -OutputPath $testLicenseJson `
+            -DownloadDirectory $testDownloadDirectory `
+            -TargetFramework "net8.0"
+        $installerPackages = Invoke-NuGetLicenseReport `
+            -InputPath $installerProjectPath `
+            -OutputPath $installerLicenseJson `
+            -DownloadDirectory $installerDownloadDirectory
 
-    Copy-PackageLicenseFile `
-        -GlobalPackagesPath $globalPackagesPath `
-        -PackageId "Autodesk.Inventor.Sdk" `
-        -Version "1.0.3" `
-        -PackageRelativePath "LICENSE.txt" `
-        -DestinationPath (Join-Path $licensesDestination "Autodesk.Inventor.Sdk-1.0.3-LICENSE.txt")
+        $packageMap = @{}
+        Add-LicensePackagesToMap -PackageMap $packageMap -Packages $pluginPackages -RequestedScope "Plugin" -RuntimePackageKeys $runtimePackageKeys -DownloadDirectory $pluginDownloadDirectory
+        Add-LicensePackagesToMap -PackageMap $packageMap -Packages $testPackages -RequestedScope "Test" -RuntimePackageKeys $runtimePackageKeys -DownloadDirectory $testDownloadDirectory
+        Add-LicensePackagesToMap -PackageMap $packageMap -Packages $installerPackages -RequestedScope "Build" -RuntimePackageKeys $runtimePackageKeys -DownloadDirectory $installerDownloadDirectory
 
-    Copy-PackageLicenseFile `
-        -GlobalPackagesPath $globalPackagesPath `
-        -PackageId "WixToolset.Sdk" `
-        -Version "6.0.2" `
-        -PackageRelativePath "OSMFEULA.txt" `
-        -DestinationPath (Join-Path $licensesDestination "WixToolset-6.0.2-OSMFEULA.txt")
+        $installerFallbackLicensePackage = @($installerPackages | Select-Object -First 1)
+        if ($installerFallbackLicensePackage.Count -gt 0)
+        {
+            $installerSdkPackage = Get-ProjectSdkPackage -ProjectFilePath $installerProjectPath -FallbackLicensePackage $installerFallbackLicensePackage[0]
+            if ($null -ne $installerSdkPackage)
+            {
+                Add-LicensePackagesToMap -PackageMap $packageMap -Packages @($installerSdkPackage) -RequestedScope "Build" -RuntimePackageKeys $runtimePackageKeys -DownloadDirectory $installerDownloadDirectory
+            }
+        }
+
+        $bundledLicensePaths = @{}
+        foreach ($packageKey in ($packageMap.Keys | Sort-Object))
+        {
+            $entry = $packageMap[$packageKey]
+            $bundledLicensePaths[$packageKey] = Copy-PackageLicenseArtifact `
+                -Package $entry.Package `
+                -DownloadDirectories ([string[]]$entry.DownloadDirectories) `
+                -LicensesDestination $licensesDestination
+        }
+
+        $noticesContent = New-ThirdPartyNoticesContent -PackageMap $packageMap -BundledLicensePaths $bundledLicensePaths
+        Set-Content -LiteralPath $noticePath -Value $noticesContent
+    }
+    finally
+    {
+        Remove-IfExists -PathToRemove $temporaryLicenseRoot
+    }
 }
 
 function New-DirectoryTree
