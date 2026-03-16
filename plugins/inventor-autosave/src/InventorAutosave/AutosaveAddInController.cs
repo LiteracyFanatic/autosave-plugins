@@ -14,6 +14,7 @@ using FormsMessageBoxIcon = System.Windows.Forms.MessageBoxIcon;
 using FormsNotifyIcon = System.Windows.Forms.NotifyIcon;
 using FormsSystemIcons = System.Drawing.SystemIcons;
 using FormsTimer = System.Windows.Forms.Timer;
+using FormsDialogResult = System.Windows.Forms.DialogResult;
 
 namespace InventorAutosave;
 
@@ -47,7 +48,10 @@ internal sealed class AutosaveAddInController : IDisposable
         _logger = loggerFactory.CreateLogger<AutosaveAddInController>();
         _settingsStore = new AutosaveSettingsStore(loggerFactory.CreateLogger<AutosaveSettingsStore>());
         _settings = _settingsStore.Load();
-        _autosaveService = new InventorAutosaveService(application, loggerFactory.CreateLogger<InventorAutosaveService>());
+        _autosaveService = new InventorAutosaveService(
+            application,
+            loggerFactory.CreateLogger<InventorAutosaveService>(),
+            PromptForEditEnvironmentSave);
         _timer = new FormsTimer { Interval = TimerHeartbeatMilliseconds };
         _timer.Tick += OnTimerTick;
         _notifyIcon = new FormsNotifyIcon
@@ -58,11 +62,13 @@ internal sealed class AutosaveAddInController : IDisposable
         };
 
         _logger.LogInformation(
-            "Controller created. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}.",
+            "Controller created. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
             _settings.TargetDirectory,
             _settings.SnapshotIntervalMinutes,
             _settings.NotificationsEnabled,
-            _settings.KeepSnapshotDirectories);
+            _settings.KeepSnapshotDirectories,
+            _settings.WarnAboutFilesOutsideTargetDirectory,
+            _settings.WarnAboutUnsavedFiles);
     }
 
     public void Initialize()
@@ -339,11 +345,12 @@ internal sealed class AutosaveAddInController : IDisposable
     private void ExecuteSnapshot(SnapshotTriggerSource source)
     {
         _logger.LogInformation(
-            "Snapshot requested. Source {Source}. TargetDirectory {TargetDirectory}. KeepSnapshotDirectories {KeepSnapshotDirectories}. NotificationsEnabled {NotificationsEnabled}.",
+            "Snapshot requested. Source {Source}. TargetDirectory {TargetDirectory}. KeepSnapshotDirectories {KeepSnapshotDirectories}. NotificationsEnabled {NotificationsEnabled}. IgnorePatternCount {IgnorePatternCount}.",
             source,
             _settings.TargetDirectory,
             _settings.KeepSnapshotDirectories,
-            _settings.NotificationsEnabled);
+            _settings.NotificationsEnabled,
+            _settings.IgnorePatterns.Length);
 
         if (!ValidateTargetDirectory())
         {
@@ -368,11 +375,18 @@ internal sealed class AutosaveAddInController : IDisposable
             var result = _autosaveService.RunSnapshot(
                 _settings.TargetDirectory,
                 includeHashDiffFromPreviousSnapshot: true,
-                _settings.KeepSnapshotDirectories);
+                _settings.KeepSnapshotDirectories,
+                _settings.IgnorePatterns,
+                _settings.EditEnvironmentSaveBehavior,
+                _settings.DeferredSaveMinutes,
+                _autoSnapshotsRunning);
             LogSnapshotResult(source, result);
             var message = BuildCompletionMessage(result);
-            var hasWarnings = result.FailedDocuments.Count > 0
-                || result.SkippedUnsavedDocuments.Count > 0
+            var hasWarnings = result.Cancelled
+                || result.FailedDocuments.Count > 0
+                || ShouldShowSkippedFileWarning(result)
+                || result.IgnoredDocuments.Count > 0
+                || result.DelayedDocuments.Count > 0
                 || result.CopyFailures.Count > 0;
 
             ShowStatus(message);
@@ -393,6 +407,14 @@ internal sealed class AutosaveAddInController : IDisposable
         }
         finally
         {
+            if (source == SnapshotTriggerSource.Manual && _autoSnapshotsRunning)
+            {
+                _nextSnapshotDueAtUtc = SnapshotSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.SnapshotIntervalMinutes);
+                _logger.LogInformation(
+                    "Manual save restarted autosave timer. NextSnapshotDueAtUtc {NextSnapshotDueAtUtc}.",
+                    _nextSnapshotDueAtUtc.Value);
+            }
+
             _singleFlightGate.Exit();
             UpdateRuntimeState();
         }
@@ -441,6 +463,11 @@ internal sealed class AutosaveAddInController : IDisposable
 
     private string BuildCompletionMessage(SnapshotRunResult result)
     {
+        if (result.Cancelled)
+        {
+            return result.CancellationReason;
+        }
+
         var outputPath = BuildSnapshotOutputPath(result);
         var message = $"Autosave completed to {outputPath} ({result.CopiedFileCount} file(s) copied";
         if (result.SavedDocumentCount > 0)
@@ -450,14 +477,31 @@ internal sealed class AutosaveAddInController : IDisposable
 
         message += ").";
 
-        if (result.SkippedUnsavedDocuments.Count > 0)
-        {
-            message += $" Skipped unsaved: {string.Join(", ", result.SkippedUnsavedDocuments)}.";
-        }
-
         if (result.FailedDocuments.Count > 0)
         {
             message += $" Failed saves: {string.Join(", ", result.FailedDocuments)}.";
+        }
+
+        if (_settings.WarnAboutFilesOutsideTargetDirectory
+            && result.SkippedOutsideTargetDocuments.Count > 0)
+        {
+            message += $" Open files outside the target folder were skipped: {string.Join(", ", result.SkippedOutsideTargetDocuments)}.";
+        }
+
+        if (_settings.WarnAboutUnsavedFiles
+            && result.SkippedUnsavedDocuments.Count > 0)
+        {
+            message += $" Unsaved files were skipped: {string.Join(", ", result.SkippedUnsavedDocuments)}.";
+        }
+
+        if (result.IgnoredDocuments.Count > 0)
+        {
+            message += $" Ignored saves: {string.Join(", ", result.IgnoredDocuments)}.";
+        }
+
+        if (result.DelayedDocuments.Count > 0)
+        {
+            message += $" Delayed saves: {string.Join(", ", result.DelayedDocuments)}.";
         }
 
         if (result.CopyFailures.Count > 0)
@@ -487,6 +531,14 @@ internal sealed class AutosaveAddInController : IDisposable
         }
 
         return "the snapshot output";
+    }
+
+    private bool ShouldShowSkippedFileWarning(SnapshotRunResult result)
+    {
+        return (_settings.WarnAboutFilesOutsideTargetDirectory
+                && result.SkippedOutsideTargetDocuments.Count > 0)
+            || (_settings.WarnAboutUnsavedFiles
+                && result.SkippedUnsavedDocuments.Count > 0);
     }
 
     private void UpdateRuntimeState()
@@ -583,11 +635,16 @@ internal sealed class AutosaveAddInController : IDisposable
         _settings = _statusControl.BuildSettings();
         _settingsStore.Save(_settings);
         _logger.LogInformation(
-            "Settings updated from panel. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}.",
+            "Settings updated from panel. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. IgnorePatternCount {IgnorePatternCount}. EditEnvironmentSaveBehavior {EditEnvironmentSaveBehavior}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
             _settings.TargetDirectory,
             _settings.SnapshotIntervalMinutes,
             _settings.NotificationsEnabled,
-            _settings.KeepSnapshotDirectories);
+            _settings.KeepSnapshotDirectories,
+            _settings.IgnorePatterns.Length,
+            _settings.EditEnvironmentSaveBehavior,
+            _settings.DeferredSaveMinutes,
+            _settings.WarnAboutFilesOutsideTargetDirectory,
+            _settings.WarnAboutUnsavedFiles);
         if (_autoSnapshotsRunning
             && previousSettings.SnapshotIntervalMinutes != _settings.SnapshotIntervalMinutes)
         {
@@ -611,7 +668,7 @@ internal sealed class AutosaveAddInController : IDisposable
         }
 
         ShowStatus(
-            $"Autosave settings updated. Interval: {_settings.SnapshotIntervalMinutes} minute(s). Notifications: {(_settings.NotificationsEnabled ? "on" : "off")}. Keep folders: {(_settings.KeepSnapshotDirectories ? "on" : "off")}.");
+            $"Autosave settings updated. Interval: {_settings.SnapshotIntervalMinutes} minute(s). Notifications: {(_settings.NotificationsEnabled ? "on" : "off")}. Keep extracted folders: {(_settings.KeepSnapshotDirectories ? "on" : "off")}. Ignore patterns: {_settings.IgnorePatterns.Length}. Save behavior: {FormatSaveBehavior(_settings.EditEnvironmentSaveBehavior, _settings.DeferredSaveMinutes)}. Skip warnings: outside target {(_settings.WarnAboutFilesOutsideTargetDirectory ? "on" : "off")}, unsaved {(_settings.WarnAboutUnsavedFiles ? "on" : "off")}.");
     }
 
     private void OnResetRibbonInterface(NameValueMap context)
@@ -623,15 +680,20 @@ internal sealed class AutosaveAddInController : IDisposable
     private void LogSnapshotResult(SnapshotTriggerSource source, SnapshotRunResult result)
     {
         _logger.LogInformation(
-            "Snapshot completed. Source {Source}. SnapshotArchivePath {SnapshotArchivePath}. SnapshotDirectory {SnapshotDirectory}. PreviousSnapshotPath {PreviousSnapshotPath}. DirtyDetectedCount {DirtyDetectedCount}. SavedDocumentCount {SavedDocumentCount}. FailedDocumentCount {FailedDocumentCount}. SkippedUnsavedCount {SkippedUnsavedCount}. CopiedFileCount {CopiedFileCount}. CopyFailureCount {CopyFailureCount}. HashDifferenceCount {HashDifferenceCount}.",
+            "Snapshot completed. Source {Source}. Cancelled {Cancelled}. CancellationReason {CancellationReason}. SnapshotArchivePath {SnapshotArchivePath}. SnapshotDirectory {SnapshotDirectory}. PreviousSnapshotPath {PreviousSnapshotPath}. DirtyDetectedCount {DirtyDetectedCount}. SavedDocumentCount {SavedDocumentCount}. FailedDocumentCount {FailedDocumentCount}. SkippedOutsideTargetCount {SkippedOutsideTargetCount}. SkippedUnsavedCount {SkippedUnsavedCount}. IgnoredDocumentCount {IgnoredDocumentCount}. DelayedDocumentCount {DelayedDocumentCount}. CopiedFileCount {CopiedFileCount}. CopyFailureCount {CopyFailureCount}. HashDifferenceCount {HashDifferenceCount}.",
             source,
+            result.Cancelled,
+            result.CancellationReason,
             result.SnapshotArchivePath,
             result.SnapshotDirectory,
             result.PreviousSnapshotPath,
             result.DirtyDocumentsDetected.Count,
             result.SavedDocuments.Count,
             result.FailedDocuments.Count,
+            result.SkippedOutsideTargetDocuments.Count,
             result.SkippedUnsavedDocuments.Count,
+            result.IgnoredDocuments.Count,
+            result.DelayedDocuments.Count,
             result.CopiedFileCount,
             result.CopyFailures.Count,
             result.FilesDifferentFromPreviousSnapshot.Count);
@@ -651,6 +713,11 @@ internal sealed class AutosaveAddInController : IDisposable
             _logger.LogDebug("Files differing from previous snapshot: {DifferingFiles}", string.Join(" | ", result.FilesDifferentFromPreviousSnapshot));
         }
 
+        if (result.SkippedOutsideTargetDocuments.Count > 0)
+        {
+            _logger.LogInformation("Skipped open documents outside the target directory: {SkippedOutsideTargetDocuments}", string.Join(" | ", result.SkippedOutsideTargetDocuments));
+        }
+
         if (result.SkippedUnsavedDocuments.Count > 0)
         {
             _logger.LogWarning("Skipped unsaved documents: {SkippedUnsavedDocuments}", string.Join(" | ", result.SkippedUnsavedDocuments));
@@ -661,9 +728,37 @@ internal sealed class AutosaveAddInController : IDisposable
             _logger.LogWarning("Documents that could not be saved: {FailedDocuments}", string.Join(" | ", result.FailedDocuments));
         }
 
+        if (result.IgnoredDocuments.Count > 0)
+        {
+            _logger.LogInformation("Documents skipped by user choice: {IgnoredDocuments}", string.Join(" | ", result.IgnoredDocuments));
+        }
+
+        if (result.DelayedDocuments.Count > 0)
+        {
+            _logger.LogInformation("Documents delayed by user choice: {DelayedDocuments}", string.Join(" | ", result.DelayedDocuments));
+        }
+
         if (result.CopyFailures.Count > 0)
         {
             _logger.LogWarning("Snapshot copy failures: {CopyFailures}", string.Join(" | ", result.CopyFailures));
         }
+    }
+
+    private EditEnvironmentPromptResult PromptForEditEnvironmentSave(string documentLabel, int delayMinutes, bool canDelay)
+    {
+        using var prompt = new EditEnvironmentSavePromptForm(documentLabel, delayMinutes, canDelay);
+        return prompt.ShowDialog() switch
+        {
+            FormsDialogResult.Yes => new EditEnvironmentPromptResult(EditEnvironmentPromptChoice.SaveNow, delayMinutes),
+            FormsDialogResult.Retry => new EditEnvironmentPromptResult(EditEnvironmentPromptChoice.Delay, delayMinutes),
+            _ => new EditEnvironmentPromptResult(EditEnvironmentPromptChoice.Ignore, delayMinutes),
+        };
+    }
+
+    private static string FormatSaveBehavior(EditEnvironmentSaveBehavior behavior, int deferredSaveMinutes)
+    {
+        return behavior == EditEnvironmentSaveBehavior.Prompt
+            ? $"ask me (delay {deferredSaveMinutes} minute(s))"
+            : "close and save automatically";
     }
 }

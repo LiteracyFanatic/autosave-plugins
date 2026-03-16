@@ -4,6 +4,10 @@ namespace InventorAutosave.Core;
 
 internal sealed class SnapshotRunResult
 {
+    public bool Cancelled { get; set; }
+
+    public string CancellationReason { get; set; } = string.Empty;
+
     public string SnapshotDirectory { get; set; } = string.Empty;
 
     public string SnapshotArchivePath { get; set; } = string.Empty;
@@ -20,7 +24,13 @@ internal sealed class SnapshotRunResult
 
     public List<string> FailedDocuments { get; } = new();
 
+    public List<string> SkippedOutsideTargetDocuments { get; } = new();
+
     public List<string> SkippedUnsavedDocuments { get; } = new();
+
+    public List<string> IgnoredDocuments { get; } = new();
+
+    public List<string> DelayedDocuments { get; } = new();
 
     public List<string> CopyFailures { get; } = new();
 

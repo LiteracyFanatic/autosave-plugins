@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.Serialization.Json;
+using System.Text;
 using InventorAutosave.Core;
 using Microsoft.Extensions.Logging;
 
@@ -32,16 +33,36 @@ internal sealed class AutosaveSettingsStore
                 return new AutosaveSettings();
             }
 
-            using var stream = File.OpenRead(_settingsPath);
+            var settingsJson = File.ReadAllText(_settingsPath);
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(settingsJson));
             var settings = (AutosaveSettings?)Serializer.ReadObject(stream)
                 ?? new AutosaveSettings();
+            settings.IgnorePatterns ??= AutosaveDefaults.CreateDefaultIgnorePatterns();
+            if (settings.DeferredSaveMinutes < 1)
+            {
+                settings.DeferredSaveMinutes = AutosaveDefaults.DefaultDeferredSaveMinutes;
+            }
+            if (!settingsJson.Contains("\"WarnAboutFilesOutsideTargetDirectory\"", StringComparison.Ordinal))
+            {
+                settings.WarnAboutFilesOutsideTargetDirectory = true;
+            }
+
+            if (!settingsJson.Contains("\"WarnAboutUnsavedFiles\"", StringComparison.Ordinal))
+            {
+                settings.WarnAboutUnsavedFiles = true;
+            }
             _logger.LogInformation(
-                "Loaded settings from {SettingsPath}. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}.",
+                "Loaded settings from {SettingsPath}. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. IgnorePatternCount {IgnorePatternCount}. EditEnvironmentSaveBehavior {EditEnvironmentSaveBehavior}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
                 _settingsPath,
                 settings.TargetDirectory,
                 settings.SnapshotIntervalMinutes,
                 settings.NotificationsEnabled,
-                settings.KeepSnapshotDirectories);
+                settings.KeepSnapshotDirectories,
+                settings.IgnorePatterns.Length,
+                settings.EditEnvironmentSaveBehavior,
+                settings.DeferredSaveMinutes,
+                settings.WarnAboutFilesOutsideTargetDirectory,
+                settings.WarnAboutUnsavedFiles);
             return settings;
         }
         catch (Exception ex)
@@ -64,12 +85,17 @@ internal sealed class AutosaveSettingsStore
             using var stream = File.Create(_settingsPath);
             Serializer.WriteObject(stream, settings);
             _logger.LogInformation(
-                "Saved settings to {SettingsPath}. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}.",
+                "Saved settings to {SettingsPath}. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. IgnorePatternCount {IgnorePatternCount}. EditEnvironmentSaveBehavior {EditEnvironmentSaveBehavior}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
                 _settingsPath,
                 settings.TargetDirectory,
                 settings.SnapshotIntervalMinutes,
                 settings.NotificationsEnabled,
-                settings.KeepSnapshotDirectories);
+                settings.KeepSnapshotDirectories,
+                settings.IgnorePatterns?.Length ?? 0,
+                settings.EditEnvironmentSaveBehavior,
+                settings.DeferredSaveMinutes,
+                settings.WarnAboutFilesOutsideTargetDirectory,
+                settings.WarnAboutUnsavedFiles);
         }
         catch (Exception ex)
         {
