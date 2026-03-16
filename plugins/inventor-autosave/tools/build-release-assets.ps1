@@ -46,6 +46,21 @@ function Convert-ToMsiVersion
     throw "Version '$RawVersion' must match vMAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH."
 }
 
+function Convert-ToSdkVersion
+{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RawVersion
+    )
+
+    if ($RawVersion -match '^[vV]?(\d+)\.(\d+)\.(\d+)$')
+    {
+        return "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+    }
+
+    throw "Version '$RawVersion' must match vMAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH."
+}
+
 function Convert-ToAssetLabel
 {
     param(
@@ -795,6 +810,7 @@ function New-PayloadManifest
     Set-Content -LiteralPath $ManifestPath -Value $manifest
 }
 
+$sdkVersion = Convert-ToSdkVersion -RawVersion $Version
 $msiVersion = Convert-ToMsiVersion -RawVersion $Version
 $safeAssetLabel = Convert-ToAssetLabel -RawLabel $AssetVersionLabel
 
@@ -813,7 +829,7 @@ New-Item -ItemType Directory -Path $installerOutputDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $assetsDirectory -Force | Out-Null
 
 Write-Host "Publishing Inventor Autosave..."
-& dotnet publish $projectPath -c $Configuration -o $payloadDirectory "-p:Version=$Version"
+& dotnet publish $projectPath -c $Configuration -o $payloadDirectory "-p:Version=$sdkVersion"
 if ($LASTEXITCODE -ne 0)
 {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
