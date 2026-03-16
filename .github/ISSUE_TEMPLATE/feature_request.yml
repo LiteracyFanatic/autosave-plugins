@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a new capability or improvement for Inventor Autosave
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement.
+
+        Good feature requests explain the workflow problem first, then the proposed change.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the workflow friction, limitation, or missing behavior.
+      placeholder: Tell us what is hard, slow, risky, or impossible today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: Describe the behavior, setting, or UI you want.
+      placeholder: Explain the feature from a user's point of view.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Example use case
+      description: A concrete workflow helps a lot.
+      placeholder: |
+        Example:
+        - I work on ...
+        - I need ...
+        - This would help because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds, related tools, or other approaches you have tried.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Mockups, screenshots, references, or implementation ideas.
+    validations:
+      required: false

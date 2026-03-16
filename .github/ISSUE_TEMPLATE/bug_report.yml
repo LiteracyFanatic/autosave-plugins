@@ -1,0 +1,109 @@
+name: Bug report
+description: Report a defect, regression, or confusing behavior in Inventor Autosave
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report.
+
+        Before submitting:
+
+        - Open **Inventor Autosave -> About** and copy the **Build** value into the version field below.
+        - Collect logs from `%LOCALAPPDATA%\InventorAutosave\logs\`
+        - Useful files usually include `inventor-autosave-YYYYMMDD.log` and `startup-trace.log`
+        - Drag and drop the relevant log files into the log section below, or paste the relevant excerpts
+
+  - type: input
+    id: version
+    attributes:
+      label: Inventor Autosave version
+      description: Find this in the About window inside the add-in.
+      placeholder: "Example: 0.1.0+git-hash"
+    validations:
+      required: true
+
+  - type: input
+    id: inventor_version
+    attributes:
+      label: Inventor version
+      placeholder: "Example: Inventor 2026"
+    validations:
+      required: true
+
+  - type: input
+    id: windows_version
+    attributes:
+      label: Windows version
+      placeholder: "Example: Windows 11 24H2"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Install method
+      options:
+        - MSI release installer
+        - Manual ZIP / file copy
+        - Local development install script
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the actual problem and why it is incorrect.
+      placeholder: Tell us what you expected and what actually happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide a minimal sequence that reliably triggers the issue.
+      placeholder: |
+        1. Open ...
+        2. Start autosave with ...
+        3. Wait until ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: Describe what should have happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Logs are in `%LOCALAPPDATA%\InventorAutosave\logs\`. Drag files here or paste relevant excerpts.
+      placeholder: Paste or attach `inventor-autosave-YYYYMMDD.log`, `startup-trace.log`, or both.
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or recordings
+      description: Optional, but often useful for UI/layout or workflow issues.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Anything else that might help narrow the issue down.
+    validations:
+      required: false

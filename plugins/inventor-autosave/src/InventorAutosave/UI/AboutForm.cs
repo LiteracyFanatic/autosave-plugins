@@ -55,29 +55,65 @@ internal sealed class AboutForm : Form
             Margin = new Padding(0, 0, 0, 6),
         }, 0, 0);
 
-        root.Controls.Add(new Label
+        var versionPanel = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            Margin = new Padding(0, 0, 0, 6),
+        };
+        versionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        versionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        versionPanel.Controls.Add(new Label
         {
             AutoSize = true,
             Text = $"Build: {AutosaveLogManager.GetBuildVersion()}",
-            Margin = new Padding(0, 0, 0, 6),
-        }, 0, 1);
+            Margin = new Padding(0, 0, 8, 0),
+        }, 0, 0);
+
+        var copyVersionButton = new Button
+        {
+            AutoSize = true,
+            Text = "Copy Version",
+            Margin = new Padding(0),
+        };
+        copyVersionButton.Click += (_, _) => CopyText($"Build: {AutosaveLogManager.GetBuildVersion()}");
+        versionPanel.Controls.Add(copyVersionButton, 1, 0);
+        root.Controls.Add(versionPanel, 0, 1);
 
         root.Controls.Add(new Label
         {
             AutoSize = true,
             MaximumSize = new System.Drawing.Size(620, 0),
-            Text = "Inventor Autosave is an Autodesk Inventor add-in that saves dirty documents and captures timestamped project-folder snapshots as recovery ZIP archives.",
+            Text = "Inventor Autosave is an Autodesk Inventor add-in that saves dirty documents and captures timestamped project-folder snapshots to track how a project evolves over time.",
             Margin = new Padding(0, 0, 0, 10),
         }, 0, 2);
 
-        var repoLink = new LinkLabel
+        var repoPanel = new TableLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            Margin = new Padding(0, 0, 0, 12),
+        };
+        repoPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        repoPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        repoPanel.Controls.Add(new Label
         {
             AutoSize = true,
             Text = RepositoryUrl,
-            Margin = new Padding(0, 0, 0, 12),
+            Margin = new Padding(0, 0, 8, 0),
+        }, 0, 0);
+
+        var openRepositoryButton = new Button
+        {
+            AutoSize = true,
+            Text = "Open Repository",
+            Margin = new Padding(0),
         };
-        repoLink.LinkClicked += (_, _) => OpenRepository();
-        root.Controls.Add(repoLink, 0, 3);
+        openRepositoryButton.Click += (_, _) => OpenRepository();
+        repoPanel.Controls.Add(openRepositoryButton, 1, 0);
+        root.Controls.Add(repoPanel, 0, 3);
 
         var packagesGroup = new GroupBox
         {
@@ -219,6 +255,17 @@ internal sealed class AboutForm : Form
                 FileName = RepositoryUrl,
                 UseShellExecute = true,
             });
+        }
+        catch
+        {
+        }
+    }
+
+    private static void CopyText(string text)
+    {
+        try
+        {
+            Clipboard.SetText(text);
         }
         catch
         {
