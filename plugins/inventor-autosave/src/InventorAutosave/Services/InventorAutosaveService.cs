@@ -152,38 +152,29 @@ internal sealed class InventorAutosaveService : IDisposable
             return;
         }
 
-        if (!TryPrepareModalCommandForSave(
-                document,
-                label,
-                shouldCheckEditEnvironmentFirst,
-                result,
-                trackedPath,
-                deferredSaveMinutes))
-        {
-            return;
-        }
-
         if (TrySilentSave(document, label, "initial"))
         {
             CompleteSuccessfulSave(document, label, trackedPath, result, "initial silent save");
             return;
         }
 
-        if (!TryPrepareModalCommandForSave(
-                document,
-                label,
-                shouldCheckEditEnvironmentFirst,
-                result,
-                trackedPath,
-                deferredSaveMinutes))
+        if (shouldCheckEditEnvironmentFirst && NeedsPreparationForSave(document, label))
         {
-            return;
-        }
+            if (!TryPrepareModalCommandForSave(
+                    document,
+                    label,
+                    result,
+                    trackedPath,
+                    deferredSaveMinutes))
+            {
+                return;
+            }
 
-        if (TrySilentSave(document, label, "post-prompt"))
-        {
-            CompleteSuccessfulSave(document, label, trackedPath, result, "silent save after modal prompt");
-            return;
+            if (TrySilentSave(document, label, "post-prompt"))
+            {
+                CompleteSuccessfulSave(document, label, trackedPath, result, "silent save after modal prompt");
+                return;
+            }
         }
 
         result.FailedDocuments.Add(label);
@@ -193,16 +184,10 @@ internal sealed class InventorAutosaveService : IDisposable
     private bool TryPrepareModalCommandForSave(
         Document document,
         string label,
-        bool shouldCheckEditEnvironmentFirst,
         AutosaveRunResult result,
         string trackedPath,
         int deferredSaveMinutes)
     {
-        if (!shouldCheckEditEnvironmentFirst || !NeedsPreparationForSave(document, label))
-        {
-            return true;
-        }
-
         AutosavePromptDecision decision;
         try
         {
@@ -385,39 +370,7 @@ internal sealed class InventorAutosaveService : IDisposable
     private bool NeedsPreparationForSave(Document document, string label)
     {
         return TryGetEditObject(document, label) != null
-            || IsPromptRequiredEnvironmentActive(document, label)
             || IsNonDefaultCommandActive(document);
-    }
-
-    private bool IsPromptRequiredEnvironmentActive(Document document, string label)
-    {
-        try
-        {
-            var activeDocument = _application.ActiveDocument;
-            if (!ReferenceEquals(activeDocument, document))
-            {
-                return false;
-            }
-
-            var activeEnvironment = _application.UserInterfaceManager.ActiveEnvironment;
-            var displayName = SafeGet(() => activeEnvironment.DisplayName, string.Empty);
-            var internalName = SafeGet(() => activeEnvironment.InternalName, string.Empty);
-            var isPromptRequired = ActiveInventorEnvironmentClassifier.IsPromptRequired(displayName, internalName);
-            if (isPromptRequired)
-            {
-                _logger.LogDebug(
-                    "Prompt-required Inventor environment active for {DocumentLabel}. ActiveEnvironment {ActiveEnvironment}.",
-                    label,
-                    FormatEnvironment(displayName, internalName));
-            }
-
-            return isPromptRequired;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not inspect active Inventor environment for {DocumentLabel}.", label);
-            return false;
-        }
     }
 
     private void ExitEditOnObject(object editObject, string label)
