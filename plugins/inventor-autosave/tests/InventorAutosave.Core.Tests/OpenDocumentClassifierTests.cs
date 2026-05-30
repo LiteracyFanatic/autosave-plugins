@@ -9,7 +9,7 @@ public class OpenDocumentClassifierTests
     public void Classify_ReturnsSkipUnsavedForDirtyUnsavedDocument()
     {
         var classification = OpenDocumentClassifier.Classify(
-            new OpenDocumentSnapshotInfo
+            new OpenDocumentAutosaveInfo
             {
                 DisplayName = "Unsaved Part",
                 FullPath = string.Empty,
@@ -23,7 +23,7 @@ public class OpenDocumentClassifierTests
     public void Classify_ReturnsEligibleForSaveForTrackedDirtySavedDocument()
     {
         var classification = OpenDocumentClassifier.Classify(
-            new OpenDocumentSnapshotInfo
+            new OpenDocumentAutosaveInfo
             {
                 DisplayName = "vice.iam",
                 FullPath = @"C:\work\vice\vice.iam",
@@ -39,7 +39,7 @@ public class OpenDocumentClassifierTests
     public void Classify_ReturnsEligibleForSaveForSavedDirtyTargetDocument()
     {
         var classification = OpenDocumentClassifier.Classify(
-            new OpenDocumentSnapshotInfo
+            new OpenDocumentAutosaveInfo
             {
                 DisplayName = "vice.iam",
                 FullPath = @"C:\work\vice\vice.iam",
@@ -55,7 +55,7 @@ public class OpenDocumentClassifierTests
     public void Classify_ReturnsSkipCleanForSavedCleanTargetDocument()
     {
         var classification = OpenDocumentClassifier.Classify(
-            new OpenDocumentSnapshotInfo
+            new OpenDocumentAutosaveInfo
             {
                 DisplayName = "vice.iam",
                 FullPath = @"C:\work\vice\vice.iam",
@@ -68,10 +68,10 @@ public class OpenDocumentClassifierTests
     }
 
     [Fact]
-    public void Classify_ReturnsEligibleForSaveForSavedDocumentOutsideTargetDirectory()
+    public void Classify_ReturnsEligibleForSaveForSavedDocumentInAnyDirectory()
     {
         var classification = OpenDocumentClassifier.Classify(
-            new OpenDocumentSnapshotInfo
+            new OpenDocumentAutosaveInfo
             {
                 DisplayName = "vice.iam",
                 FullPath = @"\\server\share\vice\vice.iam",
@@ -84,13 +84,13 @@ public class OpenDocumentClassifierTests
     }
 
     [Fact]
-    public void Classify_ReturnsEligibleForSaveForDirtySavedSnapshotDocument()
+    public void Classify_ReturnsEligibleForSaveForDirtySavedDocumentInArchiveDirectory()
     {
         var classification = OpenDocumentClassifier.Classify(
-            new OpenDocumentSnapshotInfo
+            new OpenDocumentAutosaveInfo
             {
                 DisplayName = "vice.iam",
-                FullPath = @"C:\work\vice\snapshots\2026-03-11T09-04-05\vice.iam",
+                FullPath = @"C:\work\vice\archive\2026-03-11T09-04-05\vice.iam",
                 IsDirty = true,
                 IsTrackedDirty = false,
             });

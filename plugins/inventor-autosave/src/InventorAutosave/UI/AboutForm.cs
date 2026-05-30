@@ -85,7 +85,7 @@ internal sealed class AboutForm : Form
         {
             AutoSize = true,
             MaximumSize = new System.Drawing.Size(620, 0),
-            Text = "Inventor Autosave is an Autodesk Inventor add-in that saves dirty documents and captures timestamped project-folder snapshots to track how a project evolves over time.",
+            Text = "Inventor Autosave is an Autodesk Inventor add-in that saves dirty open documents in place on a timed or manual cadence.",
             Margin = new Padding(0, 0, 0, 10),
         }, 0, 2);
 

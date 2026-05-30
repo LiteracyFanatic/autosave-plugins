@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Text.Json;
 using InventorAutosave.Core;
 using Microsoft.Extensions.Logging;
 
@@ -37,14 +38,10 @@ internal sealed class AutosaveSettingsStore
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(settingsJson));
             var settings = (AutosaveSettings?)Serializer.ReadObject(stream)
                 ?? new AutosaveSettings();
-            settings.IgnorePatterns ??= AutosaveDefaults.CreateDefaultIgnorePatterns();
+            settings.AutosaveIntervalMinutes = ResolveAutosaveIntervalMinutes(settings, settingsJson);
             if (settings.DeferredSaveMinutes < 1)
             {
                 settings.DeferredSaveMinutes = AutosaveDefaults.DefaultDeferredSaveMinutes;
-            }
-            if (!settingsJson.Contains("\"WarnAboutFilesOutsideTargetDirectory\"", StringComparison.Ordinal))
-            {
-                settings.WarnAboutFilesOutsideTargetDirectory = true;
             }
 
             if (!settingsJson.Contains("\"WarnAboutUnsavedFiles\"", StringComparison.Ordinal))
@@ -52,16 +49,11 @@ internal sealed class AutosaveSettingsStore
                 settings.WarnAboutUnsavedFiles = true;
             }
             _logger.LogInformation(
-                "Loaded settings from {SettingsPath}. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. IgnorePatternCount {IgnorePatternCount}. EditEnvironmentSaveBehavior {EditEnvironmentSaveBehavior}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
+                "Loaded settings from {SettingsPath}. IntervalMinutes {AutosaveIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
                 _settingsPath,
-                settings.TargetDirectory,
-                settings.SnapshotIntervalMinutes,
+                settings.AutosaveIntervalMinutes,
                 settings.NotificationsEnabled,
-                settings.KeepSnapshotDirectories,
-                settings.IgnorePatterns.Length,
-                settings.EditEnvironmentSaveBehavior,
                 settings.DeferredSaveMinutes,
-                settings.WarnAboutFilesOutsideTargetDirectory,
                 settings.WarnAboutUnsavedFiles);
             return settings;
         }
@@ -85,16 +77,11 @@ internal sealed class AutosaveSettingsStore
             using var stream = File.Create(_settingsPath);
             Serializer.WriteObject(stream, settings);
             _logger.LogInformation(
-                "Saved settings to {SettingsPath}. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. IgnorePatternCount {IgnorePatternCount}. EditEnvironmentSaveBehavior {EditEnvironmentSaveBehavior}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
+                "Saved settings to {SettingsPath}. IntervalMinutes {AutosaveIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
                 _settingsPath,
-                settings.TargetDirectory,
-                settings.SnapshotIntervalMinutes,
+                settings.AutosaveIntervalMinutes,
                 settings.NotificationsEnabled,
-                settings.KeepSnapshotDirectories,
-                settings.IgnorePatterns?.Length ?? 0,
-                settings.EditEnvironmentSaveBehavior,
                 settings.DeferredSaveMinutes,
-                settings.WarnAboutFilesOutsideTargetDirectory,
                 settings.WarnAboutUnsavedFiles);
         }
         catch (Exception ex)
@@ -102,5 +89,32 @@ internal sealed class AutosaveSettingsStore
             _logger.LogError(ex, "Failed to save settings to {SettingsPath}.", _settingsPath);
             throw;
         }
+    }
+
+    private static int ResolveAutosaveIntervalMinutes(AutosaveSettings settings, string settingsJson)
+    {
+        if (settingsJson.Contains("\"AutosaveIntervalMinutes\"", StringComparison.Ordinal)
+            && settings.AutosaveIntervalMinutes >= 1)
+        {
+            return settings.AutosaveIntervalMinutes;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(settingsJson);
+            if (document.RootElement.TryGetProperty("SnapshotIntervalMinutes", out var legacyInterval)
+                && legacyInterval.TryGetInt32(out var legacyIntervalMinutes)
+                && legacyIntervalMinutes >= 1)
+            {
+                return legacyIntervalMinutes;
+            }
+        }
+        catch
+        {
+        }
+
+        return settings.AutosaveIntervalMinutes >= 1
+            ? settings.AutosaveIntervalMinutes
+            : AutosaveDefaults.DefaultIntervalMinutes;
     }
 }

@@ -6,7 +6,7 @@ namespace InventorAutosave.UI;
 
 internal sealed class EditEnvironmentSavePromptForm : Form
 {
-    public EditEnvironmentSavePromptForm(string documentLabel, int delayMinutes, bool canDelay)
+    public EditEnvironmentSavePromptForm(string documentLabel, int delayMinutes)
     {
         Text = "Autosave Action Required";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -31,7 +31,7 @@ internal sealed class EditEnvironmentSavePromptForm : Form
         {
             AutoSize = true,
             MaximumSize = new Size(360, 0),
-            Text = $"\"{documentLabel}\" needs Inventor to close the current edit environment before it can be saved.",
+            Text = $"\"{documentLabel}\" is in an active edit environment or command that must be resolved before it can be autosaved.",
             Margin = new Padding(0, 0, 0, 8),
         }, 0, 0);
 
@@ -39,9 +39,7 @@ internal sealed class EditEnvironmentSavePromptForm : Form
         {
             AutoSize = true,
             MaximumSize = new Size(360, 0),
-            Text = canDelay
-                ? "Choose whether to save now, cancel this autosave, or delay it for the configured interval."
-                : "Choose whether to save now or cancel this autosave. Delay is only available while automatic autosaves are running.",
+            Text = "Autosave could not save quietly. Choose whether to save now, delay this document, or ignore it for the current autosave without showing a warning.",
             Margin = new Padding(0, 0, 0, 12),
         }, 0, 1);
 
@@ -71,16 +69,13 @@ internal sealed class EditEnvironmentSavePromptForm : Form
         };
         buttonPanel.Controls.Add(ignoreButton);
 
-        if (canDelay)
+        var delayButton = new Button
         {
-            var delayButton = new Button
-            {
-                AutoSize = true,
-                Text = $"Delay {delayMinutes} min",
-                DialogResult = DialogResult.Retry,
-            };
-            buttonPanel.Controls.Add(delayButton);
-        }
+            AutoSize = true,
+            Text = $"Delay {delayMinutes} min",
+            DialogResult = DialogResult.Retry,
+        };
+        buttonPanel.Controls.Add(delayButton);
 
         CancelButton = ignoreButton;
         root.Controls.Add(buttonPanel, 0, 2);

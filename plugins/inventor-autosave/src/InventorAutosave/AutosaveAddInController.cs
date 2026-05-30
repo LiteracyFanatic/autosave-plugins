@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using InventorAutosave.Core;
 using InventorAutosave.Core.Logic;
 using InventorAutosave.Services;
@@ -7,14 +6,13 @@ using InventorAutosave.UI;
 using Inventor;
 using Microsoft.Extensions.Logging;
 using DrawingColor = System.Drawing.Color;
-using FormsFolderBrowserDialog = System.Windows.Forms.FolderBrowserDialog;
+using FormsDialogResult = System.Windows.Forms.DialogResult;
 using FormsMessageBox = System.Windows.Forms.MessageBox;
 using FormsMessageBoxButtons = System.Windows.Forms.MessageBoxButtons;
 using FormsMessageBoxIcon = System.Windows.Forms.MessageBoxIcon;
 using FormsNotifyIcon = System.Windows.Forms.NotifyIcon;
 using FormsSystemIcons = System.Drawing.SystemIcons;
 using FormsTimer = System.Windows.Forms.Timer;
-using FormsDialogResult = System.Windows.Forms.DialogResult;
 
 namespace InventorAutosave;
 
@@ -34,8 +32,8 @@ internal sealed class AutosaveAddInController : IDisposable
     private readonly FormsNotifyIcon _notifyIcon;
 
     private AutosaveSettings _settings;
-    private bool _autoSnapshotsRunning;
-    private DateTime? _nextSnapshotDueAtUtc;
+    private bool _automaticAutosavesRunning;
+    private DateTime? _nextAutosaveDueAtUtc;
     private string _lastStatusMessage = "Idle";
     private UserInterfaceEvents? _userInterfaceEvents;
     private ButtonDefinition? _showTimerButton;
@@ -51,7 +49,7 @@ internal sealed class AutosaveAddInController : IDisposable
         _autosaveService = new InventorAutosaveService(
             application,
             loggerFactory.CreateLogger<InventorAutosaveService>(),
-            PromptForEditEnvironmentSave);
+            PromptForModalSave);
         _timer = new FormsTimer { Interval = TimerHeartbeatMilliseconds };
         _timer.Tick += OnTimerTick;
         _notifyIcon = new FormsNotifyIcon
@@ -62,12 +60,10 @@ internal sealed class AutosaveAddInController : IDisposable
         };
 
         _logger.LogInformation(
-            "Controller created. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
-            _settings.TargetDirectory,
-            _settings.SnapshotIntervalMinutes,
+            "Controller created. IntervalMinutes {AutosaveIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
+            _settings.AutosaveIntervalMinutes,
             _settings.NotificationsEnabled,
-            _settings.KeepSnapshotDirectories,
-            _settings.WarnAboutFilesOutsideTargetDirectory,
+            _settings.DeferredSaveMinutes,
             _settings.WarnAboutUnsavedFiles);
     }
 
@@ -101,11 +97,10 @@ internal sealed class AutosaveAddInController : IDisposable
 
         if (_statusControl != null)
         {
-            _statusControl.BrowseRequested -= OnBrowseRequested;
             _statusControl.SettingsChanged -= OnSettingsChanged;
             _statusControl.StartRequested -= OnStartRequested;
             _statusControl.StopRequested -= OnStopRequested;
-            _statusControl.SnapshotNowRequested -= OnSnapshotNowRequested;
+            _statusControl.AutosaveNowRequested -= OnAutosaveNowRequested;
         }
 
         if (_statusWindow != null)
@@ -173,35 +168,21 @@ internal sealed class AutosaveAddInController : IDisposable
 
     private void CreateUserInterface()
     {
-        var ribbonNames = new[]
+        foreach (Ribbon ribbon in _application.UserInterfaceManager.Ribbons)
         {
-            "ZeroDoc",
-            "Part",
-            "Assembly",
-            "Drawing",
-            "Presentation",
-            "UnknownDocument",
-        };
-
-        foreach (var ribbonName in ribbonNames)
-        {
-            TryCreateRibbonTab(ribbonName);
+            TryCreateRibbonTab(ribbon);
         }
     }
 
-    private void TryCreateRibbonTab(string ribbonName)
+    private void TryCreateRibbonTab(Ribbon ribbon)
     {
-        Ribbon? ribbon;
-        try
-        {
-            ribbon = _application.UserInterfaceManager.Ribbons[ribbonName];
-        }
-        catch
+        var ribbonKey = SanitizeInternalNameSegment(GetRibbonInternalName(ribbon));
+        if (string.IsNullOrWhiteSpace(ribbonKey))
         {
             return;
         }
 
-        var tabInternalName = $"InventorAutosave.{ribbonName}.Tab";
+        var tabInternalName = $"InventorAutosave.{ribbonKey}.Tab";
         RibbonTab ribbonTab;
 
         try
@@ -210,10 +191,18 @@ internal sealed class AutosaveAddInController : IDisposable
         }
         catch
         {
-            ribbonTab = ribbon.RibbonTabs.Add(RibbonTabDisplayName, tabInternalName, ClientId);
+            try
+            {
+                ribbonTab = ribbon.RibbonTabs.Add(RibbonTabDisplayName, tabInternalName, ClientId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not create autosave ribbon tab for ribbon {RibbonKey}.", ribbonKey);
+                return;
+            }
         }
 
-        var panelInternalName = $"InventorAutosave.{ribbonName}.Panel";
+        var panelInternalName = $"InventorAutosave.{ribbonKey}.Panel";
         RibbonPanel ribbonPanel;
         try
         {
@@ -221,7 +210,15 @@ internal sealed class AutosaveAddInController : IDisposable
         }
         catch
         {
-            ribbonPanel = ribbonTab.RibbonPanels.Add("Autosave", panelInternalName, ClientId);
+            try
+            {
+                ribbonPanel = ribbonTab.RibbonPanels.Add("Autosave", panelInternalName, ClientId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not create autosave ribbon panel for ribbon {RibbonKey}.", ribbonKey);
+                return;
+            }
         }
 
         EnsureButton(ribbonPanel, _showTimerButton);
@@ -275,11 +272,10 @@ internal sealed class AutosaveAddInController : IDisposable
         _statusControl = new AutosaveStatusControl();
         _statusControl.CreateControl();
         _statusControl.LoadSettings(_settings);
-        _statusControl.BrowseRequested += OnBrowseRequested;
         _statusControl.SettingsChanged += OnSettingsChanged;
         _statusControl.StartRequested += OnStartRequested;
         _statusControl.StopRequested += OnStopRequested;
-        _statusControl.SnapshotNowRequested += OnSnapshotNowRequested;
+        _statusControl.AutosaveNowRequested += OnAutosaveNowRequested;
 
         try
         {
@@ -300,26 +296,6 @@ internal sealed class AutosaveAddInController : IDisposable
         ShowStatus("Autosave panel shown.");
     }
 
-    private void OnBrowseRequested(object? sender, EventArgs e)
-    {
-        if (_statusControl == null)
-        {
-            return;
-        }
-
-        using var dialog = new FormsFolderBrowserDialog
-        {
-            Description = "Choose the project folder to autosave.",
-            SelectedPath = _statusControl.TargetDirectory,
-            ShowNewFolderButton = false,
-        };
-
-        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-        {
-            _statusControl.SetTargetDirectory(dialog.SelectedPath);
-        }
-    }
-
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
         ApplySettingsFromPanel(showStatusMessage: false);
@@ -328,66 +304,47 @@ internal sealed class AutosaveAddInController : IDisposable
     private void OnStartRequested(object? sender, EventArgs e)
     {
         ApplySettingsFromPanel(showStatusMessage: false);
-        StartSnapshots();
+        StartAutosaves();
     }
 
     private void OnStopRequested(object? sender, EventArgs e)
     {
-        StopSnapshots();
+        StopAutosaves();
     }
 
-    private void OnSnapshotNowRequested(object? sender, EventArgs e)
+    private void OnAutosaveNowRequested(object? sender, EventArgs e)
     {
         ApplySettingsFromPanel(showStatusMessage: false);
-        ExecuteSnapshot(SnapshotTriggerSource.Manual);
+        ExecuteAutosave(AutosaveTriggerSource.Manual);
     }
 
-    private void ExecuteSnapshot(SnapshotTriggerSource source)
+    private void ExecuteAutosave(AutosaveTriggerSource source)
     {
         _logger.LogInformation(
-            "Snapshot requested. Source {Source}. TargetDirectory {TargetDirectory}. KeepSnapshotDirectories {KeepSnapshotDirectories}. NotificationsEnabled {NotificationsEnabled}. IgnorePatternCount {IgnorePatternCount}.",
+            "Autosave requested. Source {Source}. NotificationsEnabled {NotificationsEnabled}. DeferredSaveMinutes {DeferredSaveMinutes}.",
             source,
-            _settings.TargetDirectory,
-            _settings.KeepSnapshotDirectories,
             _settings.NotificationsEnabled,
-            _settings.IgnorePatterns.Length);
-
-        if (!ValidateTargetDirectory())
-        {
-            return;
-        }
+            _settings.DeferredSaveMinutes);
 
         if (!_singleFlightGate.TryEnter())
         {
-            var triggerText = source == SnapshotTriggerSource.Manual ? "Manual autosave ignored" : "Scheduled autosave skipped";
-            _logger.LogWarning("Snapshot request skipped because another autosave is already running. Source {Source}.", source);
+            var triggerText = source == AutosaveTriggerSource.Manual ? "Manual autosave ignored" : "Scheduled autosave skipped";
+            _logger.LogWarning("Autosave request skipped because another autosave is already running. Source {Source}.", source);
             ShowStatus($"{triggerText} because another autosave is already running.");
             return;
         }
 
         try
         {
-            _lastStatusMessage = source == SnapshotTriggerSource.Auto
+            _lastStatusMessage = source == AutosaveTriggerSource.Auto
                 ? "Running scheduled autosave..."
                 : "Running manual autosave...";
             UpdateStatusDisplay();
 
-            var result = _autosaveService.RunSnapshot(
-                _settings.TargetDirectory,
-                includeHashDiffFromPreviousSnapshot: true,
-                _settings.KeepSnapshotDirectories,
-                _settings.IgnorePatterns,
-                _settings.EditEnvironmentSaveBehavior,
-                _settings.DeferredSaveMinutes,
-                _autoSnapshotsRunning);
-            LogSnapshotResult(source, result);
+            var result = _autosaveService.RunAutosave(_settings.DeferredSaveMinutes);
+            LogAutosaveResult(source, result);
             var message = BuildCompletionMessage(result);
-            var hasWarnings = result.Cancelled
-                || result.FailedDocuments.Count > 0
-                || ShouldShowSkippedFileWarning(result)
-                || result.IgnoredDocuments.Count > 0
-                || result.DelayedDocuments.Count > 0
-                || result.CopyFailures.Count > 0;
+            var hasWarnings = AutosaveCompletionPolicy.ShouldShowWarning(result, _settings.WarnAboutUnsavedFiles);
 
             ShowStatus(message);
 
@@ -397,22 +354,22 @@ internal sealed class AutosaveAddInController : IDisposable
             }
             else if (_settings.NotificationsEnabled)
             {
-                ShowSnapshotBalloon(message);
+                ShowAutosaveBalloon(message);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Autosave failed. Source {Source}. TargetDirectory {TargetDirectory}.", source, _settings.TargetDirectory);
+            _logger.LogError(ex, "Autosave failed. Source {Source}.", source);
             ShowErrorDialog($"Autosave failed: {ex.Message}");
         }
         finally
         {
-            if (source == SnapshotTriggerSource.Manual && _autoSnapshotsRunning)
+            if (source == AutosaveTriggerSource.Manual && _automaticAutosavesRunning)
             {
-                _nextSnapshotDueAtUtc = SnapshotSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.SnapshotIntervalMinutes);
+                _nextAutosaveDueAtUtc = AutosaveSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.AutosaveIntervalMinutes);
                 _logger.LogInformation(
-                    "Manual save restarted autosave timer. NextSnapshotDueAtUtc {NextSnapshotDueAtUtc}.",
-                    _nextSnapshotDueAtUtc.Value);
+                    "Manual save restarted autosave timer. NextAutosaveDueAtUtc {NextAutosaveDueAtUtc}.",
+                    _nextAutosaveDueAtUtc.Value);
             }
 
             _singleFlightGate.Exit();
@@ -420,72 +377,35 @@ internal sealed class AutosaveAddInController : IDisposable
         }
     }
 
-    private bool ValidateTargetDirectory()
-    {
-        if (string.IsNullOrWhiteSpace(_settings.TargetDirectory))
-        {
-            _logger.LogWarning("Snapshot validation failed because the target directory is not configured.");
-            ShowErrorDialog("Choose a target folder in the autosave panel before starting autosaves.");
-            return false;
-        }
-
-        if (!Directory.Exists(_settings.TargetDirectory))
-        {
-            _logger.LogWarning("Snapshot validation failed because the target directory does not exist: {TargetDirectory}", _settings.TargetDirectory);
-            ShowErrorDialog($"Autosave target folder does not exist: {_settings.TargetDirectory}");
-            return false;
-        }
-
-        return true;
-    }
-
     private void OnTimerTick(object? sender, EventArgs e)
     {
-        if (_autoSnapshotsRunning
-            && _nextSnapshotDueAtUtc.HasValue
-            && DateTime.UtcNow >= _nextSnapshotDueAtUtc.Value)
+        if (_automaticAutosavesRunning
+            && _nextAutosaveDueAtUtc.HasValue
+            && DateTime.UtcNow >= _nextAutosaveDueAtUtc.Value)
         {
             _logger.LogInformation(
                 "Scheduled autosave is due. DueAtUtc {DueAtUtc}. CurrentTimeUtc {CurrentTimeUtc}.",
-                _nextSnapshotDueAtUtc.Value,
+                _nextAutosaveDueAtUtc.Value,
                 DateTime.UtcNow);
-            ExecuteSnapshot(SnapshotTriggerSource.Auto);
+            ExecuteAutosave(AutosaveTriggerSource.Auto);
 
-            if (_autoSnapshotsRunning)
+            if (_automaticAutosavesRunning)
             {
-                _nextSnapshotDueAtUtc = SnapshotSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.SnapshotIntervalMinutes);
-                _logger.LogDebug("Next scheduled autosave set to {NextSnapshotDueAtUtc}.", _nextSnapshotDueAtUtc.Value);
+                _nextAutosaveDueAtUtc = AutosaveSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.AutosaveIntervalMinutes);
+                _logger.LogDebug("Next scheduled autosave set to {NextAutosaveDueAtUtc}.", _nextAutosaveDueAtUtc.Value);
             }
         }
 
         UpdateRuntimeState();
     }
 
-    private string BuildCompletionMessage(SnapshotRunResult result)
+    private string BuildCompletionMessage(AutosaveRunResult result)
     {
-        if (result.Cancelled)
-        {
-            return result.CancellationReason;
-        }
-
-        var outputPath = BuildSnapshotOutputPath(result);
-        var message = $"Autosave completed to {outputPath} ({result.CopiedFileCount} file(s) copied";
-        if (result.SavedDocumentCount > 0)
-        {
-            message += $", {result.SavedDocumentCount} document(s) saved";
-        }
-
-        message += ").";
+        var message = $"Autosave completed ({result.SavedDocumentCount} document(s) saved).";
 
         if (result.FailedDocuments.Count > 0)
         {
             message += $" Failed saves: {string.Join(", ", result.FailedDocuments)}.";
-        }
-
-        if (_settings.WarnAboutFilesOutsideTargetDirectory
-            && result.SkippedOutsideTargetDocuments.Count > 0)
-        {
-            message += $" Open files outside the target folder were skipped: {string.Join(", ", result.SkippedOutsideTargetDocuments)}.";
         }
 
         if (_settings.WarnAboutUnsavedFiles
@@ -504,41 +424,7 @@ internal sealed class AutosaveAddInController : IDisposable
             message += $" Delayed saves: {string.Join(", ", result.DelayedDocuments)}.";
         }
 
-        if (result.CopyFailures.Count > 0)
-        {
-            message += $" Copy failures: {result.CopyFailures.Count}.";
-        }
-
         return message;
-    }
-
-    private static string BuildSnapshotOutputPath(SnapshotRunResult result)
-    {
-        if (!string.IsNullOrWhiteSpace(result.SnapshotArchivePath)
-            && !string.IsNullOrWhiteSpace(result.SnapshotDirectory))
-        {
-            return $"{result.SnapshotArchivePath} and {result.SnapshotDirectory}";
-        }
-
-        if (!string.IsNullOrWhiteSpace(result.SnapshotArchivePath))
-        {
-            return result.SnapshotArchivePath;
-        }
-
-        if (!string.IsNullOrWhiteSpace(result.SnapshotDirectory))
-        {
-            return result.SnapshotDirectory;
-        }
-
-        return "the snapshot output";
-    }
-
-    private bool ShouldShowSkippedFileWarning(SnapshotRunResult result)
-    {
-        return (_settings.WarnAboutFilesOutsideTargetDirectory
-                && result.SkippedOutsideTargetDocuments.Count > 0)
-            || (_settings.WarnAboutUnsavedFiles
-                && result.SkippedUnsavedDocuments.Count > 0);
     }
 
     private void UpdateRuntimeState()
@@ -554,9 +440,9 @@ internal sealed class AutosaveAddInController : IDisposable
         }
 
         _statusControl.UpdateState(
-            SnapshotSchedule.FormatCountdown(_autoSnapshotsRunning, _nextSnapshotDueAtUtc, DateTime.UtcNow),
+            AutosaveSchedule.FormatCountdown(_automaticAutosavesRunning, _nextAutosaveDueAtUtc, DateTime.UtcNow),
             _lastStatusMessage,
-            _autoSnapshotsRunning);
+            _automaticAutosavesRunning);
     }
 
     private void ShowStatus(string message)
@@ -567,7 +453,7 @@ internal sealed class AutosaveAddInController : IDisposable
         UpdateStatusDisplay();
     }
 
-    private void ShowSnapshotBalloon(string message)
+    private void ShowAutosaveBalloon(string message)
     {
         _logger.LogDebug("Showing notification balloon. Message: {Message}", message);
         _notifyIcon.BalloonTipTitle = "Inventor Autosave";
@@ -596,28 +482,23 @@ internal sealed class AutosaveAddInController : IDisposable
             FormsMessageBoxIcon.Error);
     }
 
-    private void StartSnapshots()
+    private void StartAutosaves()
     {
-        if (!ValidateTargetDirectory())
-        {
-            return;
-        }
-
-        _autoSnapshotsRunning = true;
-        _nextSnapshotDueAtUtc = SnapshotSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.SnapshotIntervalMinutes);
+        _automaticAutosavesRunning = true;
+        _nextAutosaveDueAtUtc = AutosaveSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.AutosaveIntervalMinutes);
         _timer.Start();
         UpdateRuntimeState();
         _logger.LogInformation(
-            "Automatic autosaves started. IntervalMinutes {SnapshotIntervalMinutes}. NextSnapshotDueAtUtc {NextSnapshotDueAtUtc}.",
-            _settings.SnapshotIntervalMinutes,
-            _nextSnapshotDueAtUtc.Value);
-        ShowStatus($"Automatic autosaves started ({_settings.SnapshotIntervalMinutes} minute interval).");
+            "Automatic autosaves started. IntervalMinutes {AutosaveIntervalMinutes}. NextAutosaveDueAtUtc {NextAutosaveDueAtUtc}.",
+            _settings.AutosaveIntervalMinutes,
+            _nextAutosaveDueAtUtc.Value);
+        ShowStatus($"Automatic autosaves started ({_settings.AutosaveIntervalMinutes} minute interval).");
     }
 
-    private void StopSnapshots()
+    private void StopAutosaves()
     {
-        _autoSnapshotsRunning = false;
-        _nextSnapshotDueAtUtc = null;
+        _automaticAutosavesRunning = false;
+        _nextAutosaveDueAtUtc = null;
         _timer.Stop();
         UpdateRuntimeState();
         _logger.LogInformation("Automatic autosaves stopped.");
@@ -635,23 +516,18 @@ internal sealed class AutosaveAddInController : IDisposable
         _settings = _statusControl.BuildSettings();
         _settingsStore.Save(_settings);
         _logger.LogInformation(
-            "Settings updated from panel. TargetDirectory {TargetDirectory}. IntervalMinutes {SnapshotIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. KeepSnapshotDirectories {KeepSnapshotDirectories}. IgnorePatternCount {IgnorePatternCount}. EditEnvironmentSaveBehavior {EditEnvironmentSaveBehavior}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutFilesOutsideTargetDirectory {WarnAboutFilesOutsideTargetDirectory}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
-            _settings.TargetDirectory,
-            _settings.SnapshotIntervalMinutes,
+            "Settings updated from panel. IntervalMinutes {AutosaveIntervalMinutes}. NotificationsEnabled {NotificationsEnabled}. DeferredSaveMinutes {DeferredSaveMinutes}. WarnAboutUnsavedFiles {WarnAboutUnsavedFiles}.",
+            _settings.AutosaveIntervalMinutes,
             _settings.NotificationsEnabled,
-            _settings.KeepSnapshotDirectories,
-            _settings.IgnorePatterns.Length,
-            _settings.EditEnvironmentSaveBehavior,
             _settings.DeferredSaveMinutes,
-            _settings.WarnAboutFilesOutsideTargetDirectory,
             _settings.WarnAboutUnsavedFiles);
-        if (_autoSnapshotsRunning
-            && previousSettings.SnapshotIntervalMinutes != _settings.SnapshotIntervalMinutes)
+        if (_automaticAutosavesRunning
+            && previousSettings.AutosaveIntervalMinutes != _settings.AutosaveIntervalMinutes)
         {
-            _nextSnapshotDueAtUtc = SnapshotSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.SnapshotIntervalMinutes);
+            _nextAutosaveDueAtUtc = AutosaveSchedule.ScheduleNextRunUtc(DateTime.UtcNow, _settings.AutosaveIntervalMinutes);
             _logger.LogInformation(
-                "Autosave interval changed while running. NextSnapshotDueAtUtc {NextSnapshotDueAtUtc}.",
-                _nextSnapshotDueAtUtc.Value);
+                "Autosave interval changed while running. NextAutosaveDueAtUtc {NextAutosaveDueAtUtc}.",
+                _nextAutosaveDueAtUtc.Value);
         }
 
         UpdateRuntimeState();
@@ -661,14 +537,8 @@ internal sealed class AutosaveAddInController : IDisposable
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_settings.TargetDirectory))
-        {
-            ShowStatus("Autosave settings updated. Target folder is not configured.");
-            return;
-        }
-
         ShowStatus(
-            $"Autosave settings updated. Interval: {_settings.SnapshotIntervalMinutes} minute(s). Notifications: {(_settings.NotificationsEnabled ? "on" : "off")}. Keep extracted folders: {(_settings.KeepSnapshotDirectories ? "on" : "off")}. Ignore patterns: {_settings.IgnorePatterns.Length}. Save behavior: {FormatSaveBehavior(_settings.EditEnvironmentSaveBehavior, _settings.DeferredSaveMinutes)}. Skip warnings: outside target {(_settings.WarnAboutFilesOutsideTargetDirectory ? "on" : "off")}, unsaved {(_settings.WarnAboutUnsavedFiles ? "on" : "off")}.");
+            $"Autosave settings updated. Interval: {_settings.AutosaveIntervalMinutes} minute(s). Notifications: {(_settings.NotificationsEnabled ? "on" : "off")}. Delay: {_settings.DeferredSaveMinutes} minute(s). Unsaved warnings: {(_settings.WarnAboutUnsavedFiles ? "on" : "off")}.");
     }
 
     private void OnResetRibbonInterface(NameValueMap context)
@@ -677,26 +547,17 @@ internal sealed class AutosaveAddInController : IDisposable
         _logger.LogInformation("Ribbon interface reset detected. Autosave UI recreated.");
     }
 
-    private void LogSnapshotResult(SnapshotTriggerSource source, SnapshotRunResult result)
+    private void LogAutosaveResult(AutosaveTriggerSource source, AutosaveRunResult result)
     {
         _logger.LogInformation(
-            "Snapshot completed. Source {Source}. Cancelled {Cancelled}. CancellationReason {CancellationReason}. SnapshotArchivePath {SnapshotArchivePath}. SnapshotDirectory {SnapshotDirectory}. PreviousSnapshotPath {PreviousSnapshotPath}. DirtyDetectedCount {DirtyDetectedCount}. SavedDocumentCount {SavedDocumentCount}. FailedDocumentCount {FailedDocumentCount}. SkippedOutsideTargetCount {SkippedOutsideTargetCount}. SkippedUnsavedCount {SkippedUnsavedCount}. IgnoredDocumentCount {IgnoredDocumentCount}. DelayedDocumentCount {DelayedDocumentCount}. CopiedFileCount {CopiedFileCount}. CopyFailureCount {CopyFailureCount}. HashDifferenceCount {HashDifferenceCount}.",
+            "Autosave completed. Source {Source}. DirtyDetectedCount {DirtyDetectedCount}. SavedDocumentCount {SavedDocumentCount}. FailedDocumentCount {FailedDocumentCount}. SkippedUnsavedCount {SkippedUnsavedCount}. IgnoredDocumentCount {IgnoredDocumentCount}. DelayedDocumentCount {DelayedDocumentCount}.",
             source,
-            result.Cancelled,
-            result.CancellationReason,
-            result.SnapshotArchivePath,
-            result.SnapshotDirectory,
-            result.PreviousSnapshotPath,
             result.DirtyDocumentsDetected.Count,
             result.SavedDocuments.Count,
             result.FailedDocuments.Count,
-            result.SkippedOutsideTargetDocuments.Count,
             result.SkippedUnsavedDocuments.Count,
             result.IgnoredDocuments.Count,
-            result.DelayedDocuments.Count,
-            result.CopiedFileCount,
-            result.CopyFailures.Count,
-            result.FilesDifferentFromPreviousSnapshot.Count);
+            result.DelayedDocuments.Count);
 
         if (result.DirtyDocumentsDetected.Count > 0)
         {
@@ -706,16 +567,6 @@ internal sealed class AutosaveAddInController : IDisposable
         if (result.SavedDocuments.Count > 0)
         {
             _logger.LogDebug("Saved documents: {SavedDocuments}", string.Join(" | ", result.SavedDocuments));
-        }
-
-        if (result.FilesDifferentFromPreviousSnapshot.Count > 0)
-        {
-            _logger.LogDebug("Files differing from previous snapshot: {DifferingFiles}", string.Join(" | ", result.FilesDifferentFromPreviousSnapshot));
-        }
-
-        if (result.SkippedOutsideTargetDocuments.Count > 0)
-        {
-            _logger.LogInformation("Skipped open documents outside the target directory: {SkippedOutsideTargetDocuments}", string.Join(" | ", result.SkippedOutsideTargetDocuments));
         }
 
         if (result.SkippedUnsavedDocuments.Count > 0)
@@ -737,28 +588,48 @@ internal sealed class AutosaveAddInController : IDisposable
         {
             _logger.LogInformation("Documents delayed by user choice: {DelayedDocuments}", string.Join(" | ", result.DelayedDocuments));
         }
-
-        if (result.CopyFailures.Count > 0)
-        {
-            _logger.LogWarning("Snapshot copy failures: {CopyFailures}", string.Join(" | ", result.CopyFailures));
-        }
     }
 
-    private EditEnvironmentPromptResult PromptForEditEnvironmentSave(string documentLabel, int delayMinutes, bool canDelay)
+    private AutosavePromptChoice PromptForModalSave(string documentLabel, int delayMinutes)
     {
-        using var prompt = new EditEnvironmentSavePromptForm(documentLabel, delayMinutes, canDelay);
+        using var prompt = new EditEnvironmentSavePromptForm(documentLabel, delayMinutes);
         return prompt.ShowDialog() switch
         {
-            FormsDialogResult.Yes => new EditEnvironmentPromptResult(EditEnvironmentPromptChoice.SaveNow, delayMinutes),
-            FormsDialogResult.Retry => new EditEnvironmentPromptResult(EditEnvironmentPromptChoice.Delay, delayMinutes),
-            _ => new EditEnvironmentPromptResult(EditEnvironmentPromptChoice.Ignore, delayMinutes),
+            FormsDialogResult.Yes => AutosavePromptChoice.SaveNow,
+            FormsDialogResult.Retry => AutosavePromptChoice.Delay,
+            _ => AutosavePromptChoice.Ignore,
         };
     }
 
-    private static string FormatSaveBehavior(EditEnvironmentSaveBehavior behavior, int deferredSaveMinutes)
+    private static string GetRibbonInternalName(Ribbon ribbon)
     {
-        return behavior == EditEnvironmentSaveBehavior.Prompt
-            ? $"ask me (delay {deferredSaveMinutes} minute(s))"
-            : "close and save automatically";
+        try
+        {
+            return ribbon.InternalName;
+        }
+        catch
+        {
+        }
+
+        return string.Empty;
+    }
+
+    private static string SanitizeInternalNameSegment(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var chars = value.ToCharArray();
+        for (var index = 0; index < chars.Length; index++)
+        {
+            if (!char.IsLetterOrDigit(chars[index]) && chars[index] != '_' && chars[index] != '.')
+            {
+                chars[index] = '_';
+            }
+        }
+
+        return new string(chars);
     }
 }

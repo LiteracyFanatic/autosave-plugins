@@ -7,7 +7,7 @@ internal enum OpenDocumentDisposition
     SkipUnsaved,
 }
 
-internal sealed class OpenDocumentSnapshotInfo
+internal sealed class OpenDocumentAutosaveInfo
 {
     public string DisplayName { get; init; } = string.Empty;
 
@@ -27,7 +27,7 @@ internal sealed class OpenDocumentClassification
 
 internal static class OpenDocumentClassifier
 {
-    public static OpenDocumentClassification Classify(OpenDocumentSnapshotInfo document)
+    public static OpenDocumentClassification Classify(OpenDocumentAutosaveInfo document)
     {
         var shouldCheckEditEnvironmentFirst = document.IsDirty || document.IsTrackedDirty;
 
