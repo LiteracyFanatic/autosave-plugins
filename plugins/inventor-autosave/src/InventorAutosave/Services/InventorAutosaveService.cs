@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
-using System.Linq;
 using InventorAutosave.Core;
 using InventorAutosave.Core.Logic;
 using Inventor;
@@ -17,7 +15,7 @@ internal sealed class InventorAutosaveService : IDisposable
 
     private readonly Application _application;
     private readonly ILogger<InventorAutosaveService> _logger;
-    private readonly Func<string, int, bool, EditEnvironmentPromptResult> _promptForEditEnvironmentSave;
+    private readonly Func<string, int, AutosavePromptChoice> _promptForModalSave;
     private readonly object _trackedDirtyDocumentsGate = new();
     private readonly HashSet<string> _trackedDirtyDocuments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _deferredSaveUntilUtc = new(StringComparer.OrdinalIgnoreCase);
@@ -26,11 +24,11 @@ internal sealed class InventorAutosaveService : IDisposable
     public InventorAutosaveService(
         Application application,
         ILogger<InventorAutosaveService> logger,
-        Func<string, int, bool, EditEnvironmentPromptResult> promptForEditEnvironmentSave)
+        Func<string, int, AutosavePromptChoice> promptForModalSave)
     {
         _application = application;
         _logger = logger;
-        _promptForEditEnvironmentSave = promptForEditEnvironmentSave;
+        _promptForModalSave = promptForModalSave;
         try
         {
             _fileAccessEvents = _application.FileAccessEvents;
@@ -43,49 +41,24 @@ internal sealed class InventorAutosaveService : IDisposable
         }
     }
 
-    public SnapshotRunResult RunSnapshot(
-        string targetDirectory,
-        bool includeHashDiffFromPreviousSnapshot,
-        bool keepSnapshotDirectories,
-        IEnumerable<string>? ignorePatterns,
-        EditEnvironmentSaveBehavior editEnvironmentSaveBehavior,
-        int deferredSaveMinutes,
-        bool allowDelayDuringPrompt)
+    public AutosaveRunResult RunAutosave(int deferredSaveMinutes)
     {
-        var normalizedTarget = PathUtilities.NormalizeDirectory(targetDirectory);
-        var result = new SnapshotRunResult();
+        var result = new AutosaveRunResult();
         var stopwatch = Stopwatch.StartNew();
-        var effectiveIgnorePatterns = ignorePatterns?.ToArray() ?? Array.Empty<string>();
         var effectiveDeferredSaveMinutes = Math.Max(1, deferredSaveMinutes);
 
         try
         {
             _logger.LogInformation(
-                "Starting snapshot run. TargetDirectory {TargetDirectory}. IncludeHashDiffFromPreviousSnapshot {IncludeHashDiffFromPreviousSnapshot}. KeepSnapshotDirectories {KeepSnapshotDirectories}. IgnorePatternCount {IgnorePatternCount}. EditEnvironmentSaveBehavior {EditEnvironmentSaveBehavior}. DeferredSaveMinutes {DeferredSaveMinutes}. AllowDelayDuringPrompt {AllowDelayDuringPrompt}.",
-                normalizedTarget,
-                includeHashDiffFromPreviousSnapshot,
-                keepSnapshotDirectories,
-                effectiveIgnorePatterns.Length,
-                editEnvironmentSaveBehavior,
-                effectiveDeferredSaveMinutes,
-                allowDelayDuringPrompt);
+                "Starting autosave run. DeferredSaveMinutes {DeferredSaveMinutes}.",
+                effectiveDeferredSaveMinutes);
 
             var openDocuments = ReadOpenDocuments();
-            _logger.LogInformation("Discovered {OpenDocumentCount} open document(s) before snapshot.", openDocuments.Count);
+            _logger.LogInformation("Discovered {OpenDocumentCount} open document(s) before autosave.", openDocuments.Count);
 
             foreach (var openDocument in openDocuments)
             {
-                var label = GetDocumentLabel(normalizedTarget, openDocument.Info);
-                if (IsOutsideTargetDirectory(normalizedTarget, openDocument.Info))
-                {
-                    result.SkippedOutsideTargetDocuments.Add(label);
-                    _logger.LogInformation(
-                        "Skipping open document outside target directory {DocumentLabel}. FullPath {FullPath}.",
-                        label,
-                        openDocument.Info.FullPath);
-                    continue;
-                }
-
+                var label = GetDocumentLabel(openDocument.Info);
                 var classification = OpenDocumentClassifier.Classify(openDocument.Info);
                 _logger.LogDebug(
                     "Evaluated document {DocumentLabel}. FullPath {FullPath}. IsDirty {IsDirty}. IsTrackedDirty {IsTrackedDirty}. Disposition {Disposition}. ShouldCheckEditEnvironmentFirst {ShouldCheckEditEnvironmentFirst}.",
@@ -99,19 +72,13 @@ internal sealed class InventorAutosaveService : IDisposable
                 switch (classification.Disposition)
                 {
                     case OpenDocumentDisposition.EligibleForSave:
-                        if (classification.ShouldCheckEditEnvironmentFirst)
-                        {
-                            result.DirtyDocumentsDetected.Add(label);
-                        }
-
+                        result.DirtyDocumentsDetected.Add(label);
                         AttemptSave(
                             openDocument.Document,
                             label,
                             classification.ShouldCheckEditEnvironmentFirst,
                             result,
-                            editEnvironmentSaveBehavior,
-                            effectiveDeferredSaveMinutes,
-                            allowDelayDuringPrompt);
+                            effectiveDeferredSaveMinutes);
                         break;
                     case OpenDocumentDisposition.SkipUnsaved:
                         result.SkippedUnsavedDocuments.Add(openDocument.Info.DisplayName);
@@ -120,107 +87,35 @@ internal sealed class InventorAutosaveService : IDisposable
                 }
             }
 
-            var sourceFiles = EnumerateSourceFiles(normalizedTarget, effectiveIgnorePatterns);
-
-            var snapshotTimestamp = DateTime.Now;
-            var snapshotDirectory = SnapshotPathBuilder.BuildSnapshotDirectory(normalizedTarget, snapshotTimestamp);
-            var snapshotArchivePath = SnapshotPathBuilder.BuildSnapshotArchivePath(normalizedTarget, snapshotTimestamp);
-            Directory.CreateDirectory(snapshotDirectory);
             _logger.LogInformation(
-                "Snapshot output prepared. SnapshotDirectory {SnapshotDirectory}. SnapshotArchivePath {SnapshotArchivePath}. SourceFileCount {SourceFileCount}.",
-                snapshotDirectory,
-                snapshotArchivePath,
-                sourceFiles.Length);
-
-            foreach (var sourceFile in sourceFiles)
-            {
-                var relativePath = PathUtilities.GetRelativePath(normalizedTarget, sourceFile);
-                var destinationPath = System.IO.Path.Combine(snapshotDirectory, relativePath);
-                var destinationDirectory = System.IO.Path.GetDirectoryName(destinationPath);
-                if (!string.IsNullOrWhiteSpace(destinationDirectory))
-                {
-                    Directory.CreateDirectory(destinationDirectory);
-                }
-
-                try
-                {
-                    System.IO.File.Copy(sourceFile, destinationPath, overwrite: true);
-                    result.CopiedFileCount++;
-                }
-                catch (Exception ex)
-                {
-                    result.CopyFailures.Add($"{relativePath}: {ex.Message}");
-                    _logger.LogWarning(ex, "Failed to copy snapshot file {RelativePath}.", relativePath);
-                }
-            }
-
-            result.SnapshotDirectory = snapshotDirectory;
-            if (includeHashDiffFromPreviousSnapshot)
-            {
-                var diffResult = SnapshotHashDiffComparer.CompareWithPreviousSnapshot(
-                    normalizedTarget,
-                    snapshotDirectory,
-                    effectiveIgnorePatterns);
-                result.PreviousSnapshotPath = diffResult.PreviousSnapshotPath;
-                result.FilesDifferentFromPreviousSnapshot.AddRange(diffResult.DifferingFiles);
-                _logger.LogInformation(
-                    "Snapshot hash diff completed. PreviousSnapshotPath {PreviousSnapshotPath}. DifferingFileCount {DifferingFileCount}.",
-                    result.PreviousSnapshotPath,
-                    result.FilesDifferentFromPreviousSnapshot.Count);
-            }
-
-            if (TryCreateSnapshotArchive(snapshotDirectory, snapshotArchivePath, result))
-            {
-                result.SnapshotArchivePath = snapshotArchivePath;
-
-                if (!keepSnapshotDirectories && TryDeleteSnapshotDirectory(snapshotDirectory, result))
-                {
-                    result.SnapshotDirectory = string.Empty;
-                }
-            }
-
-            _logger.LogInformation(
-                "Snapshot run completed in {ElapsedMilliseconds} ms. SavedDocumentCount {SavedDocumentCount}. FailedDocumentCount {FailedDocumentCount}. SkippedOutsideTargetCount {SkippedOutsideTargetCount}. SkippedUnsavedCount {SkippedUnsavedCount}. DirtyDetectedCount {DirtyDetectedCount}. CopiedFileCount {CopiedFileCount}. CopyFailureCount {CopyFailureCount}. HashDifferenceCount {HashDifferenceCount}. SnapshotArchivePath {SnapshotArchivePath}. SnapshotDirectory {SnapshotDirectory}. PreviousSnapshotPath {PreviousSnapshotPath}.",
+                "Autosave run completed in {ElapsedMilliseconds} ms. DirtyDetectedCount {DirtyDetectedCount}. SavedDocumentCount {SavedDocumentCount}. FailedDocumentCount {FailedDocumentCount}. SkippedUnsavedCount {SkippedUnsavedCount}. IgnoredDocumentCount {IgnoredDocumentCount}. DelayedDocumentCount {DelayedDocumentCount}.",
                 stopwatch.ElapsedMilliseconds,
+                result.DirtyDocumentsDetected.Count,
                 result.SavedDocuments.Count,
                 result.FailedDocuments.Count,
-                result.SkippedOutsideTargetDocuments.Count,
                 result.SkippedUnsavedDocuments.Count,
-                result.DirtyDocumentsDetected.Count,
-                result.CopiedFileCount,
-                result.CopyFailures.Count,
-                result.FilesDifferentFromPreviousSnapshot.Count,
-                result.SnapshotArchivePath,
-                result.SnapshotDirectory,
-                result.PreviousSnapshotPath);
+                result.IgnoredDocuments.Count,
+                result.DelayedDocuments.Count);
 
-            return result;
-        }
-        catch (SnapshotCancelledException ex)
-        {
-            result.Cancelled = true;
-            result.CancellationReason = ex.Message;
-            _logger.LogInformation("Snapshot run cancelled. Reason: {CancellationReason}", ex.Message);
             return result;
         }
         catch (Exception ex)
         {
             _logger.LogError(
                 ex,
-                "Snapshot run failed after {ElapsedMilliseconds} ms. TargetDirectory {TargetDirectory}.",
-                stopwatch.ElapsedMilliseconds,
-                normalizedTarget);
+                "Autosave run failed after {ElapsedMilliseconds} ms.",
+                stopwatch.ElapsedMilliseconds);
             throw;
         }
     }
 
-    private List<(Document Document, OpenDocumentSnapshotInfo Info)> ReadOpenDocuments()
+    private List<(Document Document, OpenDocumentAutosaveInfo Info)> ReadOpenDocuments()
     {
-        var results = new List<(Document Document, OpenDocumentSnapshotInfo Info)>();
+        var results = new List<(Document Document, OpenDocumentAutosaveInfo Info)>();
 
         foreach (Document document in _application.Documents)
         {
-            var info = new OpenDocumentSnapshotInfo
+            var info = new OpenDocumentAutosaveInfo
             {
                 DisplayName = SafeGet(() => document.DisplayName, "Untitled"),
                 FullPath = SafeGet(() => document.FullFileName, string.Empty),
@@ -238,10 +133,8 @@ internal sealed class InventorAutosaveService : IDisposable
         Document document,
         string label,
         bool shouldCheckEditEnvironmentFirst,
-        SnapshotRunResult result,
-        EditEnvironmentSaveBehavior editEnvironmentSaveBehavior,
-        int deferredSaveMinutes,
-        bool allowDelayDuringPrompt)
+        AutosaveRunResult result,
+        int deferredSaveMinutes)
     {
         _logger.LogDebug(
             "Attempting to save document {DocumentLabel}. ShouldCheckEditEnvironmentFirst {ShouldCheckEditEnvironmentFirst}.",
@@ -259,79 +152,106 @@ internal sealed class InventorAutosaveService : IDisposable
             return;
         }
 
-        if (shouldCheckEditEnvironmentFirst)
+        if (!TryPrepareModalCommandForSave(
+                document,
+                label,
+                shouldCheckEditEnvironmentFirst,
+                result,
+                trackedPath,
+                deferredSaveMinutes))
         {
-            var needsPreparation = NeedsPreparationForSave(document, label);
-            if (needsPreparation && editEnvironmentSaveBehavior == EditEnvironmentSaveBehavior.Prompt)
-            {
-                var promptResult = _promptForEditEnvironmentSave(label, deferredSaveMinutes, allowDelayDuringPrompt);
-                switch (promptResult.Choice)
-                {
-                    case EditEnvironmentPromptChoice.Ignore:
-                        result.IgnoredDocuments.Add(label);
-                        _logger.LogInformation("User ignored save for document {DocumentLabel}.", label);
-                        throw new SnapshotCancelledException(
-                            $"Autosave cancelled. No snapshot was created because {label} was ignored.");
-                    case EditEnvironmentPromptChoice.Delay:
-                        if (!allowDelayDuringPrompt)
-                        {
-                            result.IgnoredDocuments.Add(label);
-                            throw new SnapshotCancelledException(
-                                "Autosave cancelled. Delay is only available while automatic autosaves are running.");
-                        }
-
-                        var effectiveDelayMinutes = Math.Max(1, promptResult.DelayMinutes);
-                        SetDeferredSave(trackedPath, effectiveDelayMinutes);
-                        result.DelayedDocuments.Add(label);
-                        _logger.LogInformation(
-                            "User delayed save for document {DocumentLabel} by {DelayMinutes} minute(s).",
-                            label,
-                            effectiveDelayMinutes);
-                        throw new SnapshotCancelledException(
-                            $"Autosave delayed for {label} by {effectiveDelayMinutes} minute(s). No snapshot was created.");
-                }
-            }
-
-            PrepareDocumentForSave(document, label);
+            return;
         }
 
         if (TrySilentSave(document, label, "initial"))
         {
-            result.SavedDocumentCount++;
-            result.SavedDocuments.Add(label);
-            ClearTrackedDirty(document);
-            ClearDeferredSave(trackedPath);
-            _logger.LogInformation("Saved document {DocumentLabel} via initial silent save.", label);
+            CompleteSuccessfulSave(document, label, trackedPath, result, "initial silent save");
             return;
         }
 
-        if (!shouldCheckEditEnvironmentFirst || IsNonDefaultCommandActive(document))
+        if (!TryPrepareModalCommandForSave(
+                document,
+                label,
+                shouldCheckEditEnvironmentFirst,
+                result,
+                trackedPath,
+                deferredSaveMinutes))
         {
-            PrepareDocumentForSave(document, label);
-            if (TrySilentSave(document, label, "post-prepare"))
-            {
-                result.SavedDocumentCount++;
-                result.SavedDocuments.Add(label);
-                ClearTrackedDirty(document);
-                ClearDeferredSave(trackedPath);
-                _logger.LogInformation("Saved document {DocumentLabel} via silent save after preparation.", label);
-                return;
-            }
+            return;
         }
 
-        PrepareDocumentForSave(document, label);
-        if (TryInteractiveSave(document, label))
+        if (TrySilentSave(document, label, "post-prompt"))
         {
-            result.SavedDocumentCount++;
-            result.SavedDocuments.Add(label);
-            ClearTrackedDirty(document);
-            ClearDeferredSave(trackedPath);
-            _logger.LogInformation("Saved document {DocumentLabel} via interactive save.", label);
+            CompleteSuccessfulSave(document, label, trackedPath, result, "silent save after modal prompt");
             return;
         }
 
         result.FailedDocuments.Add(label);
         _logger.LogWarning("Failed to save document {DocumentLabel} after all save attempts.", label);
+    }
+
+    private bool TryPrepareModalCommandForSave(
+        Document document,
+        string label,
+        bool shouldCheckEditEnvironmentFirst,
+        AutosaveRunResult result,
+        string trackedPath,
+        int deferredSaveMinutes)
+    {
+        if (!shouldCheckEditEnvironmentFirst || !NeedsPreparationForSave(document, label))
+        {
+            return true;
+        }
+
+        AutosavePromptDecision decision;
+        try
+        {
+            var choice = _promptForModalSave(label, deferredSaveMinutes);
+            decision = AutosavePromptPolicy.Resolve(choice, deferredSaveMinutes);
+        }
+        catch (Exception ex)
+        {
+            decision = AutosavePromptPolicy.Resolve(AutosavePromptChoice.Delay, deferredSaveMinutes);
+            _logger.LogWarning(
+                ex,
+                "Could not show autosave prompt for {DocumentLabel}. ActiveCommand {ActiveCommand}. ActiveEnvironment {ActiveEnvironment}. The document will be delayed instead of interrupting the active command.",
+                label,
+                GetActiveCommandName(),
+                GetActiveEnvironmentDescription());
+        }
+
+        switch (decision.Disposition)
+        {
+            case AutosavePromptDisposition.SkipDocument:
+                result.IgnoredDocuments.Add(label);
+                _logger.LogInformation("User ignored autosave for document {DocumentLabel}.", label);
+                return false;
+            case AutosavePromptDisposition.DelayDocument:
+                SetDeferredSave(trackedPath, decision.DelayMinutes);
+                result.DelayedDocuments.Add(label);
+                _logger.LogInformation(
+                    "User delayed autosave for document {DocumentLabel} by {DelayMinutes} minute(s).",
+                    label,
+                    decision.DelayMinutes);
+                return false;
+            default:
+                PrepareDocumentForSave(document, label);
+                return true;
+        }
+    }
+
+    private void CompleteSuccessfulSave(
+        Document document,
+        string label,
+        string trackedPath,
+        AutosaveRunResult result,
+        string phase)
+    {
+        result.SavedDocumentCount++;
+        result.SavedDocuments.Add(label);
+        ClearTrackedDirty(document);
+        ClearDeferredSave(trackedPath);
+        _logger.LogInformation("Saved document {DocumentLabel} via {Phase}.", label, phase);
     }
 
     private bool TrySilentSave(Document document, string label, string phase)
@@ -378,24 +298,6 @@ internal sealed class InventorAutosaveService : IDisposable
         }
     }
 
-    private bool TryInteractiveSave(Document document, string label)
-    {
-        var saveAttemptState = CaptureSaveAttemptState(document);
-
-        try
-        {
-            document.Save();
-            var succeeded = DidSaveSucceed(document, saveAttemptState);
-            _logger.LogDebug("Interactive save attempt finished for {DocumentLabel}. Succeeded {Succeeded}.", label, succeeded);
-            return succeeded;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Interactive save attempt failed for {DocumentLabel}.", label);
-            return false;
-        }
-    }
-
     private void TryExitEditEnvironment(Document document, string label)
     {
         var editObject = TryGetEditObject(document, label);
@@ -409,7 +311,11 @@ internal sealed class InventorAutosaveService : IDisposable
 
     private void PrepareDocumentForSave(Document document, string label)
     {
-        _logger.LogDebug("Preparing document {DocumentLabel} for save.", label);
+        _logger.LogDebug(
+            "Preparing document {DocumentLabel} for save. ActiveCommand {ActiveCommand}. ActiveEnvironment {ActiveEnvironment}.",
+            label,
+            GetActiveCommandName(),
+            GetActiveEnvironmentDescription());
         TryExitEditEnvironment(document, label);
 
         if (IsNonDefaultCommandActive(document))
@@ -427,7 +333,7 @@ internal sealed class InventorAutosaveService : IDisposable
             if (ReferenceEquals(activeDocument, document))
             {
                 var activeEditObject = _application.ActiveEditObject;
-                if (activeEditObject != null)
+                if (activeEditObject != null && !IsDocumentObject(activeEditObject, document))
                 {
                     return activeEditObject;
                 }
@@ -440,7 +346,10 @@ internal sealed class InventorAutosaveService : IDisposable
 
         try
         {
-            return document.ActivatedObject;
+            var activatedObject = document.ActivatedObject;
+            return activatedObject != null && !IsDocumentObject(activatedObject, document)
+                ? activatedObject
+                : null;
         }
         catch (Exception ex)
         {
@@ -449,9 +358,66 @@ internal sealed class InventorAutosaveService : IDisposable
         }
     }
 
+    private static bool IsDocumentObject(object candidate, Document document)
+    {
+        var documentPath = SafeGet(() => document.FullFileName, string.Empty);
+        var candidatePath = SafeGet(() => Convert.ToString(((dynamic)candidate).FullFileName) ?? string.Empty, string.Empty);
+        if (!string.IsNullOrWhiteSpace(documentPath)
+            && !string.IsNullOrWhiteSpace(candidatePath)
+            && string.Equals(
+                PathUtilities.NormalizePath(documentPath),
+                PathUtilities.NormalizePath(candidatePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var documentDisplayName = SafeGet(() => document.DisplayName, string.Empty);
+        var candidateDisplayName = SafeGet(() => Convert.ToString(((dynamic)candidate).DisplayName) ?? string.Empty, string.Empty);
+        var documentObjectType = SafeGet(() => Convert.ToInt32(document.Type), int.MinValue);
+        var candidateObjectType = SafeGet(() => Convert.ToInt32(((dynamic)candidate).Type), int.MaxValue);
+
+        return documentObjectType == candidateObjectType
+            && !string.IsNullOrWhiteSpace(documentDisplayName)
+            && string.Equals(documentDisplayName, candidateDisplayName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private bool NeedsPreparationForSave(Document document, string label)
     {
-        return TryGetEditObject(document, label) != null || IsNonDefaultCommandActive(document);
+        return TryGetEditObject(document, label) != null
+            || IsPromptRequiredEnvironmentActive(document, label)
+            || IsNonDefaultCommandActive(document);
+    }
+
+    private bool IsPromptRequiredEnvironmentActive(Document document, string label)
+    {
+        try
+        {
+            var activeDocument = _application.ActiveDocument;
+            if (!ReferenceEquals(activeDocument, document))
+            {
+                return false;
+            }
+
+            var activeEnvironment = _application.UserInterfaceManager.ActiveEnvironment;
+            var displayName = SafeGet(() => activeEnvironment.DisplayName, string.Empty);
+            var internalName = SafeGet(() => activeEnvironment.InternalName, string.Empty);
+            var isPromptRequired = ActiveInventorEnvironmentClassifier.IsPromptRequired(displayName, internalName);
+            if (isPromptRequired)
+            {
+                _logger.LogDebug(
+                    "Prompt-required Inventor environment active for {DocumentLabel}. ActiveEnvironment {ActiveEnvironment}.",
+                    label,
+                    FormatEnvironment(displayName, internalName));
+            }
+
+            return isPromptRequired;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not inspect active Inventor environment for {DocumentLabel}.", label);
+            return false;
+        }
     }
 
     private void ExitEditOnObject(object editObject, string label)
@@ -652,6 +618,48 @@ internal sealed class InventorAutosaveService : IDisposable
         }
     }
 
+    private string GetActiveCommandName()
+    {
+        try
+        {
+            return _application.CommandManager.ActiveCommand ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private string GetActiveEnvironmentDescription()
+    {
+        try
+        {
+            var activeEnvironment = _application.UserInterfaceManager.ActiveEnvironment;
+            var displayName = SafeGet(() => activeEnvironment.DisplayName, string.Empty);
+            var internalName = SafeGet(() => activeEnvironment.InternalName, string.Empty);
+            return FormatEnvironment(displayName, internalName);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string FormatEnvironment(string displayName, string internalName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            return internalName;
+        }
+
+        if (string.IsNullOrWhiteSpace(internalName))
+        {
+            return displayName;
+        }
+
+        return $"{displayName} ({internalName})";
+    }
+
     private void TryStopActiveCommand()
     {
         try
@@ -722,14 +730,8 @@ internal sealed class InventorAutosaveService : IDisposable
             : PathUtilities.NormalizePath(path);
     }
 
-    private static string GetDocumentLabel(string normalizedTarget, OpenDocumentSnapshotInfo info)
+    private static string GetDocumentLabel(OpenDocumentAutosaveInfo info)
     {
-        if (!string.IsNullOrWhiteSpace(info.FullPath)
-            && PathUtilities.IsPathUnderDirectory(normalizedTarget, info.FullPath))
-        {
-            return PathUtilities.GetRelativePath(normalizedTarget, info.FullPath);
-        }
-
         if (!string.IsNullOrWhiteSpace(info.FullPath))
         {
             return info.FullPath;
@@ -738,136 +740,5 @@ internal sealed class InventorAutosaveService : IDisposable
         return info.DisplayName;
     }
 
-    private static bool IsOutsideTargetDirectory(string normalizedTarget, OpenDocumentSnapshotInfo info)
-    {
-        return !string.IsNullOrWhiteSpace(info.FullPath)
-            && !PathUtilities.IsPathUnderDirectory(normalizedTarget, info.FullPath);
-    }
-
-    private bool TryCreateSnapshotArchive(
-        string snapshotDirectory,
-        string snapshotArchivePath,
-        SnapshotRunResult result)
-    {
-        try
-        {
-            if (System.IO.File.Exists(snapshotArchivePath))
-            {
-                System.IO.File.Delete(snapshotArchivePath);
-            }
-
-            ZipFile.CreateFromDirectory(
-                snapshotDirectory,
-                snapshotArchivePath,
-                CompressionLevel.Optimal,
-                includeBaseDirectory: false);
-            _logger.LogInformation("Created snapshot archive at {SnapshotArchivePath}.", snapshotArchivePath);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            result.CopyFailures.Add($"Archive creation failed: {ex.Message}");
-            _logger.LogWarning(ex, "Failed to create snapshot archive at {SnapshotArchivePath}.", snapshotArchivePath);
-            return false;
-        }
-    }
-
-    private bool TryDeleteSnapshotDirectory(string snapshotDirectory, SnapshotRunResult result)
-    {
-        try
-        {
-            PrepareDirectoryForDeletion(snapshotDirectory);
-            Directory.Delete(snapshotDirectory, recursive: true);
-            _logger.LogDebug("Deleted temporary snapshot directory {SnapshotDirectory}.", snapshotDirectory);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            result.CopyFailures.Add($"Archive cleanup failed: {ex.Message}");
-            _logger.LogWarning(ex, "Failed to delete temporary snapshot directory {SnapshotDirectory}.", snapshotDirectory);
-            return false;
-        }
-    }
-
-    private string[] EnumerateSourceFiles(string normalizedTarget, string[] effectiveIgnorePatterns)
-    {
-        var sourceFiles = new List<string>();
-        var skippedSnapshotFiles = new List<string>();
-
-        foreach (var sourceFile in Directory.EnumerateFiles(normalizedTarget, "*", SearchOption.AllDirectories))
-        {
-            var relativePath = PathUtilities.GetRelativePath(normalizedTarget, sourceFile);
-            if (IsInsideSnapshotsRoot(relativePath))
-            {
-                skippedSnapshotFiles.Add(relativePath);
-                continue;
-            }
-
-            if (!SnapshotFileFilter.ShouldCopyFile(normalizedTarget, sourceFile, effectiveIgnorePatterns))
-            {
-                continue;
-            }
-
-            sourceFiles.Add(sourceFile);
-        }
-
-        if (skippedSnapshotFiles.Count > 0)
-        {
-            _logger.LogInformation(
-                "Excluded {SkippedSnapshotFileCount} file(s) from the snapshots directory before copying. Sample: {SkippedSnapshotFiles}.",
-                skippedSnapshotFiles.Count,
-                string.Join(" | ", skippedSnapshotFiles.Take(5)));
-        }
-
-        return sourceFiles.ToArray();
-    }
-
-    private static bool IsInsideSnapshotsRoot(string relativePath)
-    {
-        var normalizedRelativePath = relativePath.Replace('\\', '/').Trim();
-        return normalizedRelativePath.Equals("snapshots", StringComparison.OrdinalIgnoreCase)
-            || normalizedRelativePath.StartsWith("snapshots/", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void PrepareDirectoryForDeletion(string snapshotDirectory)
-    {
-        if (!Directory.Exists(snapshotDirectory))
-        {
-            return;
-        }
-
-        foreach (var filePath in Directory.EnumerateFiles(snapshotDirectory, "*", SearchOption.AllDirectories))
-        {
-            TrySetAttributesNormal(filePath);
-        }
-
-        foreach (var directoryPath in Directory.EnumerateDirectories(snapshotDirectory, "*", SearchOption.AllDirectories)
-                     .OrderByDescending(path => path.Length))
-        {
-            TrySetAttributesNormal(directoryPath);
-        }
-
-        TrySetAttributesNormal(snapshotDirectory);
-    }
-
-    private static void TrySetAttributesNormal(string path)
-    {
-        try
-        {
-            System.IO.File.SetAttributes(path, FileAttributes.Normal);
-        }
-        catch
-        {
-        }
-    }
-
     private readonly record struct SaveAttemptState(int FileSaveCounter, DateTime? LastWriteTimeUtc);
-
-    private sealed class SnapshotCancelledException : Exception
-    {
-        public SnapshotCancelledException(string message)
-            : base(message)
-        {
-        }
-    }
 }
