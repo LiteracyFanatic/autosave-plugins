@@ -2,7 +2,7 @@ using System.Threading;
 
 namespace InventorAutosave.Core.Logic;
 
-internal enum SnapshotTriggerSource
+internal enum AutosaveTriggerSource
 {
     Auto,
     Manual,

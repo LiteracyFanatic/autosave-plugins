@@ -2,7 +2,7 @@ using System;
 
 namespace InventorAutosave.Core.Logic;
 
-internal static class SnapshotSchedule
+internal static class AutosaveSchedule
 {
     public static TimeSpan GetInterval(int intervalMinutes)
     {
