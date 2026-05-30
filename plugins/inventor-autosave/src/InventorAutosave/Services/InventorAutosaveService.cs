@@ -152,12 +152,6 @@ internal sealed class InventorAutosaveService : IDisposable
             return;
         }
 
-        if (TrySilentSave(document, label, "initial"))
-        {
-            CompleteSuccessfulSave(document, label, trackedPath, result, "initial silent save");
-            return;
-        }
-
         if (shouldCheckEditEnvironmentFirst && NeedsPreparationForSave(document, label))
         {
             if (!TryPrepareModalCommandForSave(
@@ -175,6 +169,16 @@ internal sealed class InventorAutosaveService : IDisposable
                 CompleteSuccessfulSave(document, label, trackedPath, result, "silent save after modal prompt");
                 return;
             }
+
+            result.FailedDocuments.Add(label);
+            _logger.LogWarning("Failed to save document {DocumentLabel} after preparing active command or edit.", label);
+            return;
+        }
+
+        if (TrySilentSave(document, label, "initial"))
+        {
+            CompleteSuccessfulSave(document, label, trackedPath, result, "initial silent save");
+            return;
         }
 
         result.FailedDocuments.Add(label);
