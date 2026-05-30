@@ -226,19 +226,19 @@ internal sealed class AutosaveStatusControl : UserControl
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
         layout.Controls.Add(
-            CreateHelpLabel("When an active command blocks autosave, choose whether to save now, ignore this document for the current run, or delay it."),
+            CreateHelpLabel("When autosave runs in an active command or special environment, choose whether to save now, delay this document, or ignore it for the current run."),
             0,
             0);
         layout.SetColumnSpan(layout.Controls[layout.Controls.Count - 1], 2);
         layout.Controls.Add(CreateSectionLabel("Delay option (minutes)"), 0, 1);
         layout.Controls.Add(_deferredSaveMinutesNumericUpDown, 1, 1);
         layout.Controls.Add(
-            CreateHelpLabel("Delayed documents are retried after the configured delay."),
+            CreateHelpLabel("Save Now may stop the active command before saving. Ignore skips only that document and does not show a warning."),
             0,
             2);
         layout.SetColumnSpan(layout.Controls[layout.Controls.Count - 1], 2);
 
-        return CreateSectionGroup("Modal Commands", layout);
+        return CreateSectionGroup("Active Commands and Environments", layout);
     }
 
     private GroupBox CreateWarningsGroup()

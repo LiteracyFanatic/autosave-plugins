@@ -39,7 +39,7 @@ internal sealed class EditEnvironmentSavePromptForm : Form
         {
             AutoSize = true,
             MaximumSize = new Size(360, 0),
-            Text = "Choose whether to save now, ignore this document for the current autosave, or delay it for the configured interval.",
+            Text = "Choose whether to save now, delay this document, or ignore it for the current autosave without showing a warning.",
             Margin = new Padding(0, 0, 0, 12),
         }, 0, 1);
 
