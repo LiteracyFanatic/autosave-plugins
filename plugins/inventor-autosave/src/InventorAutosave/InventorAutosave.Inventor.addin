@@ -3,7 +3,7 @@
   <ClassId>{9DEF1247-47CE-4011-8065-FA0BC8E17110}</ClassId>
   <ClientId>{9DEF1247-47CE-4011-8065-FA0BC8E17110}</ClientId>
   <DisplayName>Inventor Autosave</DisplayName>
-  <Description>Timed and manual full-folder snapshots for Inventor projects.</Description>
+  <Description>Timed and manual save-in-place autosave for Inventor documents.</Description>
   <Assembly>InventorAutosave.dll</Assembly>
   <OSType>Win64</OSType>
   <LoadAutomatically>1</LoadAutomatically>
